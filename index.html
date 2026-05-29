@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Probador de API Vehículos</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
+        .container { max-width: 600px; margin: auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        button { padding: 10px 15px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-right: 5px; }
+        button:hover { background-color: #0056b3; }
+        pre { background: #f4f4f4; padding: 10px; border: 1px solid #ddd; overflow-x: auto; min-height: 100px; }
+        .status { font-weight: bold; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Prueba de API Gateway</h2>
+    
+    <div class="status" id="status">Estado: Esperando acción...</div>
+
+    <button onclick="raiz()">Raiz</button>
+    <button onclick="listarVehiculos()">Listar Vehículos</button>
+    <button onclick="actualizarVehiculo()" style="background-color: #28a745;">Actualizar Vehículo (Mock)</button>
+
+    <h3>Resultado:</h3>
+    <pre id="resultado">Los datos aparecerán aquí...</pre>
+</div>
+
+<script>
+    const API_URL = "https://xjj1zk172j.execute-api.us-east-1.amazonaws.com/v2/vehiculos";
+    const API_URL_Base = "https://xjj1zk172j.execute-api.us-east-1.amazonaws.com/v2";
+
+// Función para LISTAR (GET)
+    async function raiz() {
+        const statusDiv = document.getElementById('status');
+        const resDiv = document.getElementById('resultado');
+        
+        statusDiv.innerText = "Estado: Cargando...";
+        resDiv.innerText = "";
+
+        try {
+            const response = await fetch(API_URL_Base);
+            const data = await response.json();
+            resDiv.innerText = JSON.stringify(data, null, 2);
+            statusDiv.innerText = "Estado: ¡Éxito!";
+        } catch (error) {
+            resDiv.innerText = "Error: " + error.message;
+            statusDiv.innerText = "Estado: Error al conectar";
+        }
+    }
+
+
+    // Función para LISTAR (GET)
+    async function listarVehiculos() {
+        const statusDiv = document.getElementById('status');
+        const resDiv = document.getElementById('resultado');
+        
+        statusDiv.innerText = "Estado: Cargando...";
+        resDiv.innerText = "";
+
+        try {
+            const response = await fetch(API_URL);
+            const data = await response.json();
+            resDiv.innerText = JSON.stringify(data, null, 2);
+            statusDiv.innerText = "Estado: ¡Éxito!";
+        } catch (error) {
+            resDiv.innerText = "Error: " + error.message;
+            statusDiv.innerText = "Estado: Error al conectar";
+        }
+    }
+
+    // Función para ACTUALIZAR (PUT)
+    async function actualizarVehiculo() {
+        const statusDiv = document.getElementById('status');
+        const resDiv = document.getElementById('resultado');
+        
+        const vehiculoData = {
+            id: "33c79a34-c",
+            available: "False",
+            nota: "En mantenimiento",
+            modelo: "Cestna 172"
+        };
+
+        statusDiv.innerText = "Estado: Actualizando...";
+
+        try {
+            const response = await fetch(API_URL, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(vehiculoData)
+            });
+            const data = await response.json();
+            resDiv.innerText = JSON.stringify(data, null, 2);
+            statusDiv.innerText = "Estado: Actualización completada";
+        } catch (error) {
+            resDiv.innerText = "Error: " + error.message;
+            statusDiv.innerText = "Estado: Error al actualizar";
+        }
+    }
+</script>
+
+</body>
+</html>

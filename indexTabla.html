@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestión de Vehículos API</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background-color: #f0f2f5; color: #333; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        h2 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 15px; margin-top: 0; }
+        
+        .controls { margin: 20px 0; display: flex; gap: 12px; }
+        button { 
+            padding: 12px 24px; cursor: pointer; border: none; border-radius: 6px; 
+            font-weight: 600; transition: all 0.2s ease; font-size: 14px;
+        }
+        .btn-list { background-color: #1a73e8; color: white; }
+        .btn-list:hover { background-color: #1557b0; }
+        .btn-update { background-color: #34a853; color: white; }
+        .btn-update:hover { background-color: #2d8e47; }
+        
+        #status-bar { 
+            padding: 10px; margin-bottom: 20px; border-radius: 6px; 
+            font-size: 0.9em; background-color: #f8f9fa; border: 1px solid #ddd;
+        }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { text-align: left; padding: 15px; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; color: #5f6368; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+        tr:hover { background-color: #f1f3f4; }
+        
+        .badge { padding: 5px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .bg-available { background-color: #e6f4ea; color: #1e8e3e; }
+        .bg-maint { background-color: #fce8e6; color: #d93025; }
+        code { background: #f1f3f4; padding: 2px 5px; border-radius: 4px; font-family: monospace; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Panel de Vehículos</h2>
+    
+    <div id="status-bar">🚀 Sistema listo para conectar.</div>
+
+    <div class="controls">
+        <button id="btnListar" class="btn-list">Listar Vehículos</button>
+        <button id="btnActualizar" class="btn-update">Actualizar Vehículo Prueba</button>
+    </div>
+
+    <div id="tabla-contenedor">
+        <p style="text-align: center; color: #70757a; margin-top: 40px;">Presiona "Listar" para cargar los datos desde AWS.</p>
+    </div>
+</div>
+
+<script>
+    // --- CONFIGURACIÓN ---
+    const API_URL = "https://xjj1zk172j.execute-api.us-east-1.amazonaws.com/v1/vehiculos";
+
+    // --- FUNCIONES ---
+    
+    async function obtenerDatos() {
+        const statusBar = document.getElementById('status-bar');
+        const contenedor = document.getElementById('tabla-contenedor');
+        
+        statusBar.innerText = "⏳ Conectando con API Gateway...";
+        statusBar.style.color = "#1a73e8";
+
+        try {
+            const response = await fetch(API_URL);
+            if (!response.ok) throw new Error(`Error servidor: ${response.status}`);
+            
+            const vehiculos = await response.json();
+            renderizarTabla(vehiculos);
+            
+            statusBar.innerText = "✅ Datos actualizados correctamente.";
+            statusBar.style.color = "#34a853";
+        } catch (error) {
+            console.error(error);
+            statusBar.innerText = "❌ Error: " + error.message;
+            statusBar.style.color = "#d93025";
+            contenedor.innerHTML = `<p style="color:red; text-align:center;">No se pudo cargar la información. Revisa CORS o la URL.</p>`;
+        }
+    }
+
+    function renderizarTabla(lista) {
+        const contenedor = document.getElementById('tabla-contenedor');
+        if (lista.length === 0) {
+            contenedor.innerHTML = "<p>No hay vehículos registrados.</p>";
+            return;
+        }
+
+        let html = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Modelo</th>
+                        <th>Estado</th>
+                        <th>Nota</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        lista.forEach(v => {
+            // Manejamos si available viene como String "True"/"False" o Booleano
+            const isAvailable = String(v.available).toLowerCase() === "true";
+            html += `
+                <tr>
+                    <td><code>${v.id}</code></td>
+                    <td>${v.modelo || 'Desconocido'}</td>
+                    <td>
+                        <span class="badge ${isAvailable ? 'bg-available' : 'bg-maint'}">
+                            ${isAvailable ? 'DISPONIBLE' : 'EN TALLER'}
+                        </span>
+                    </td>
+                    <td>${v.nota || '-'}</td>
+                </tr>
+            `;
+        });
+
+        html += "</tbody></table>";
+        contenedor.innerHTML = html;
+    }
+
+    async function ejecutarActualizacion() {
+        const statusBar = document.getElementById('status-bar');
+        const payload = {
+            id: "33c79a34-c",
+            available: "False",
+            nota: "En mantenimiento (Actualizado desde Web)",
+            modelo: "Cestna 172"
+        };
+
+        statusBar.innerText = "📤 Enviando actualización...";
+
+        try {
+            const response = await fetch(API_URL, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (!response.ok) throw new Error("Error al actualizar");
+            
+            alert("¡Vehículo actualizado con éxito!");
+            obtenerDatos(); // Refrescamos la lista automáticamente
+        } catch (error) {
+            alert("Error: " + error.message);
+        }
+    }
+
+    // --- EVENTOS (Se ejecutan cuando el DOM está listo) ---
+    document.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("btnListar").addEventListener("click", obtenerDatos);
+        document.getElementById("btnActualizar").addEventListener("click", ejecutarActualizacion);
+    });
+</script>
+
+</body>
+</html>
