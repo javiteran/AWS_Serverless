@@ -5,15 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Probador de API Vehículos</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
-        .container { max-width: 600px; margin: auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        body { font-family: sans-serif; margin: 0; line-height: 1.6; background-color: #f0f2f5; }
+        .container { max-width: 600px; margin: 30px auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; background: white; }
         button { padding: 10px 15px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-right: 5px; }
         button:hover { background-color: #0056b3; }
         pre { background: #f4f4f4; padding: 10px; border: 1px solid #ddd; overflow-x: auto; min-height: 100px; }
         .status { font-weight: bold; margin-bottom: 10px; }
+
+        /* Navbar */
+        nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+        nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+        nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s, color 0.2s; white-space: nowrap; }
+        nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+        nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
     </style>
 </head>
 <body>
+
+<nav>
+    <span class="nav-brand">🚗 Mis Vehículos</span>
+    <a href="index.html" class="active">Probador API</a>
+    <a href="indexTabla.html">Panel de Vehículos</a>
+    <a href="altavehiculo.html">Alta de Vehículo</a>
+</nav>
 
 <div class="container">
     <h2>Prueba de API Gateway</h2>

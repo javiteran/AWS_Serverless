@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gestión de Vehículos API</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background-color: #f0f2f5; color: #333; }
-        .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background-color: #f0f2f5; color: #333; }
+        .container { max-width: 900px; margin: 30px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
         h2 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 15px; margin-top: 0; }
         
         .controls { margin: 20px 0; display: flex; gap: 12px; }
@@ -33,9 +33,23 @@
         .bg-available { background-color: #e6f4ea; color: #1e8e3e; }
         .bg-maint { background-color: #fce8e6; color: #d93025; }
         code { background: #f1f3f4; padding: 2px 5px; border-radius: 4px; font-family: monospace; }
+
+        /* Navbar */
+        nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+        nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+        nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s, color 0.2s; white-space: nowrap; }
+        nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+        nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
     </style>
 </head>
 <body>
+
+<nav>
+    <span class="nav-brand">🚗 Mis Vehículos</span>
+    <a href="index.html">Probador API</a>
+    <a href="indexTabla.html" class="active">Panel de Vehículos</a>
+    <a href="altavehiculo.html">Alta de Vehículo</a>
+</nav>
 
 <div class="container">
     <h2>Panel de Vehículos</h2>

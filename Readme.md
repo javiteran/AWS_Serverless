@@ -363,6 +363,7 @@ Una vez desplegado, el stack expone estos valores:
 | `WebsiteBucketName` | Nombre del bucket S3 |
 | `WebsiteUrl` | URL pública del sitio web estático |
 | `WebsiteUrlTabla` | URL directa a `indexTabla.html` |
+| `WebsiteUrlAltaVehiculo` | URL directa al formulario de alta de vehículo |
 
 ### Eliminar todos los recursos
 
@@ -383,11 +384,13 @@ aws cloudformation delete-stack \
 ```
 AWS_Serverless/
 ├── cloudformation.yaml          # Plantilla CloudFormation (infraestructura completa)
+├── cloudformation-academy.yaml  # Plantilla para AWS Academy (sin IAM, sube HTML automáticamente)
 ├── deploy.sh                    # Script de despliegue automatizado
 ├── lambda_API_REST_Vehiculos.py # Código fuente de la función Lambda (con CORS)
 ├── lambda_API_REST.py           # Versión original de la Lambda (sin CORS)
 ├── index.html                   # Página web de prueba básica
 ├── indexTabla.html              # Panel de gestión de vehículos (tabla)
+├── altavehiculo.html            # Formulario de alta de nuevo vehículo (POST)
 └── doc/                         # Documentación y diagramas de arquitectura
 ```
 

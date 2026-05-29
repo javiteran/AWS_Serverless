@@ -430,15 +430,26 @@ Resources:
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Probador de API Vehículos</title>
                 <style>
-                    body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
-                    .container { max-width: 600px; margin: auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+                    body { font-family: sans-serif; margin: 0; line-height: 1.6; background-color: #f0f2f5; }
+                    .container { max-width: 600px; margin: 30px auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; background: white; }
                     button { padding: 10px 15px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-right: 5px; }
                     button:hover { background-color: #0056b3; }
                     pre { background: #f4f4f4; padding: 10px; border: 1px solid #ddd; overflow-x: auto; min-height: 100px; }
                     .status { font-weight: bold; margin-bottom: 10px; }
+                    nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+                    nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+                    nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s; white-space: nowrap; }
+                    nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+                    nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
                 </style>
             </head>
             <body>
+            <nav>
+                <span class="nav-brand">Mis Vehículos</span>
+                <a href="index.html" class="active">Probador API</a>
+                <a href="indexTabla.html">Panel de Vehículos</a>
+                <a href="altavehiculo.html">Alta de Vehículo</a>
+            </nav>
             <div class="container">
                 <h2>Prueba de API Gateway</h2>
                 <div class="status" id="status">Estado: Esperando acción...</div>
@@ -514,8 +525,8 @@ Resources:
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Gestión de Vehículos API</title>
                 <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background-color: #f0f2f5; color: #333; }
-                    .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background-color: #f0f2f5; color: #333; }
+                    .container { max-width: 900px; margin: 30px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
                     h2 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 15px; margin-top: 0; }
                     .controls { margin: 20px 0; display: flex; gap: 12px; }
                     button { padding: 12px 24px; cursor: pointer; border: none; border-radius: 6px; font-weight: 600; transition: all 0.2s ease; font-size: 14px; }
@@ -532,9 +543,20 @@ Resources:
                     .bg-available { background-color: #e6f4ea; color: #1e8e3e; }
                     .bg-maint { background-color: #fce8e6; color: #d93025; }
                     code { background: #f1f3f4; padding: 2px 5px; border-radius: 4px; font-family: monospace; }
+                    nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+                    nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+                    nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s; white-space: nowrap; }
+                    nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+                    nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
                 </style>
             </head>
             <body>
+            <nav>
+                <span class="nav-brand">Mis Vehículos</span>
+                <a href="index.html">Probador API</a>
+                <a href="indexTabla.html" class="active">Panel de Vehículos</a>
+                <a href="altavehiculo.html">Alta de Vehículo</a>
+            </nav>
             <div class="container">
                 <h2>Panel de Vehículos</h2>
                 <div id="status-bar">Sistema listo para conectar.</div>
@@ -596,6 +618,166 @@ Resources:
             </body>
             </html>
 
+        - Key: altavehiculo.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Alta de Vehículo</title>
+                <style>
+                    * { box-sizing: border-box; margin: 0; padding: 0; }
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; min-height: 100vh; }
+                    .page-wrapper { display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
+                    .container { background: white; padding: 36px 40px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 520px; }
+                    nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+                    nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+                    nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s; white-space: nowrap; }
+                    nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+                    nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
+                    .subtitle { color: #70757a; font-size: 0.9rem; margin-bottom: 28px; border-bottom: 2px solid #e8eaed; padding-bottom: 16px; }
+                    .form-group { margin-bottom: 20px; }
+                    label { display: block; font-size: 0.85rem; font-weight: 600; color: #3c4043; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+                    label .required { color: #d93025; margin-left: 3px; }
+                    input[type="text"], select { width: 100%; padding: 10px 14px; border: 1px solid #dadce0; border-radius: 6px; font-size: 0.95rem; color: #3c4043; transition: border-color 0.2s, box-shadow 0.2s; background-color: #fff; }
+                    input[type="text"]:focus, select:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.15); }
+                    input[type="text"]::placeholder { color: #bdc1c6; }
+                    .form-row { display: flex; gap: 16px; }
+                    .form-row .form-group { flex: 1; }
+                    .btn-submit { width: 100%; padding: 13px; background-color: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background-color 0.2s; margin-top: 8px; }
+                    .btn-submit:hover { background-color: #1557b0; }
+                    .btn-submit:disabled { background-color: #a8c7fa; cursor: not-allowed; }
+                    #status-msg { margin-top: 20px; padding: 12px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 500; display: none; }
+                    #status-msg.success { background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #a8d5b5; display: block; }
+                    #status-msg.error { background-color: #fce8e6; color: #d93025; border: 1px solid #f5c6c2; display: block; }
+                    #status-msg.loading { background-color: #e8f0fe; color: #1a73e8; border: 1px solid #aecbfa; display: block; }
+                    #respuesta-json { display: none; margin-top: 16px; }
+                    #respuesta-json summary { cursor: pointer; font-size: 0.85rem; color: #70757a; user-select: none; }
+                    #respuesta-json pre { background: #f8f9fa; border: 1px solid #e8eaed; border-radius: 6px; padding: 12px; font-size: 0.82rem; overflow-x: auto; margin-top: 8px; color: #3c4043; }
+                </style>
+            </head>
+            <body>
+            <nav>
+                <span class="nav-brand">Mis Vehículos</span>
+                <a href="index.html">Probador API</a>
+                <a href="indexTabla.html">Panel de Vehículos</a>
+                <a href="altavehiculo.html" class="active">Alta de Vehículo</a>
+            </nav>
+            <div class="page-wrapper">
+            <div class="container">
+                <h2>Alta de Vehículo</h2>
+                <p class="subtitle">Introduce los datos del nuevo vehículo para registrarlo en el sistema</p>
+                <form id="formVehiculo" novalidate>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="tipo">Tipo <span class="required">*</span></label>
+                            <select id="tipo" name="tipo" required>
+                                <option value="" disabled selected>Selecciona...</option>
+                                <option value="Coche">Coche</option>
+                                <option value="Moto">Moto</option>
+                                <option value="Scooter">Scooter</option>
+                                <option value="Furgoneta">Furgoneta</option>
+                                <option value="Camión">Camión</option>
+                                <option value="Avión">Avión</option>
+                                <option value="Otro">Otro</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="combustible">Combustible <span class="required">*</span></label>
+                            <select id="combustible" name="combustible" required>
+                                <option value="" disabled selected>Selecciona...</option>
+                                <option value="Gasolina">Gasolina</option>
+                                <option value="Diésel">Diésel</option>
+                                <option value="Eléctrico">Eléctrico</option>
+                                <option value="Híbrido">Híbrido</option>
+                                <option value="Hidrógeno">Hidrógeno</option>
+                                <option value="Jet Fuel">Jet Fuel</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="matricula">Matrícula <span class="required">*</span></label>
+                        <input type="text" id="matricula" name="matricula" placeholder="Ej: ABC-1234" required maxlength="10">
+                    </div>
+                    <div class="form-group">
+                        <label for="modelo">Modelo</label>
+                        <input type="text" id="modelo" name="modelo" placeholder="Ej: Toyota Corolla" maxlength="60">
+                    </div>
+                    <div class="form-group">
+                        <label for="disponible">Disponibilidad <span class="required">*</span></label>
+                        <select id="disponible" name="disponible" required>
+                            <option value="True" selected>Disponible</option>
+                            <option value="False">No disponible</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="nota">Nota</label>
+                        <input type="text" id="nota" name="nota" placeholder="Observaciones opcionales..." maxlength="120">
+                    </div>
+                    <button type="submit" class="btn-submit" id="btnEnviar">Registrar Vehículo</button>
+                </form>
+                <div id="status-msg"></div>
+                <details id="respuesta-json">
+                    <summary>Ver respuesta del servidor</summary>
+                    <pre id="json-output"></pre>
+                </details>
+            </div>
+            </div>
+            <script>
+                const API_URL = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos";
+                const form      = document.getElementById('formVehiculo');
+                const btnEnviar = document.getElementById('btnEnviar');
+                const statusMsg = document.getElementById('status-msg');
+                const respuesta = document.getElementById('respuesta-json');
+                const jsonOut   = document.getElementById('json-output');
+                function setStatus(type, message) { statusMsg.className = type; statusMsg.textContent = message; }
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const tipo        = document.getElementById('tipo').value.trim();
+                    const combustible = document.getElementById('combustible').value.trim();
+                    const matricula   = document.getElementById('matricula').value.trim();
+                    const disponible  = document.getElementById('disponible').value;
+                    if (!tipo || !combustible || !matricula) {
+                        setStatus('error', 'Por favor, rellena todos los campos obligatorios (*).');
+                        return;
+                    }
+                    const payload = { tipo, combustible, matricula, disponible };
+                    const modelo = document.getElementById('modelo').value.trim();
+                    const nota   = document.getElementById('nota').value.trim();
+                    if (modelo) payload.modelo = modelo;
+                    if (nota)   payload.nota   = nota;
+                    btnEnviar.disabled = true;
+                    btnEnviar.textContent = 'Enviando...';
+                    setStatus('loading', 'Conectando con la API...');
+                    respuesta.style.display = 'none';
+                    try {
+                        const response = await fetch(API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await response.json();
+                        jsonOut.textContent = JSON.stringify(data, null, 2);
+                        respuesta.style.display = 'block';
+                        if (response.ok) {
+                            setStatus('success', 'Vehículo registrado correctamente. ID asignado: ' + data.id);
+                            form.reset();
+                        } else {
+                            setStatus('error', 'Error ' + response.status + ': ' + (data.error || 'Respuesta inesperada del servidor.'));
+                        }
+                    } catch (error) {
+                        setStatus('error', 'No se pudo conectar con la API. Revisa la URL o la configuración CORS.');
+                        console.error(error);
+                    } finally {
+                        btnEnviar.disabled = false;
+                        btnEnviar.textContent = 'Registrar Vehículo';
+                    }
+                });
+            </script>
+            </body>
+            </html>
 
 # ============================================================
 # OUTPUTS
@@ -629,6 +811,10 @@ Outputs:
   WebsiteUrlTabla:
     Description: "URL directa a la página de tabla de vehículos"
     Value: !Sub "${WebsiteBucket.WebsiteURL}/indexTabla.html"
+
+  WebsiteUrlAltaVehiculo:
+    Description: "URL directa al formulario de alta de vehículo"
+    Value: !Sub "${WebsiteBucket.WebsiteURL}/altavehiculo.html"
 
   LabRoleUsed:
     Description: "ARN del LabRole utilizado por las funciones Lambda"

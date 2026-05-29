@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alta de Vehículo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            min-height: 100vh;
+        }
+
+        /* Navbar */
+        nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+        nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+        nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s, color 0.2s; white-space: nowrap; }
+        nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+        nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
+
+        .page-wrapper {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 40px 20px;
+        }
+
+        .container {
+            background: white;
+            padding: 36px 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 520px;
+        }
+
+        h2 {
+            color: #1a73e8;
+            margin-bottom: 8px;
+            font-size: 1.5rem;
+        }
+
+        .subtitle {
+            color: #70757a;
+            font-size: 0.9rem;
+            margin-bottom: 28px;
+            border-bottom: 2px solid #e8eaed;
+            padding-bottom: 16px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #3c4043;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        label .required {
+            color: #d93025;
+            margin-left: 3px;
+        }
+
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #dadce0;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            color: #3c4043;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            background-color: #fff;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #1a73e8;
+            box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.15);
+        }
+
+        input[type="text"]::placeholder {
+            color: #bdc1c6;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 13px;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            margin-top: 8px;
+        }
+
+        .btn-submit:hover { background-color: #1557b0; }
+        .btn-submit:active { transform: scale(0.99); }
+        .btn-submit:disabled { background-color: #a8c7fa; cursor: not-allowed; }
+
+        /* Mensaje de estado */
+        #status-msg {
+            margin-top: 20px;
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            display: none;
+        }
+
+        #status-msg.success {
+            background-color: #e6f4ea;
+            color: #1e8e3e;
+            border: 1px solid #a8d5b5;
+            display: block;
+        }
+
+        #status-msg.error {
+            background-color: #fce8e6;
+            color: #d93025;
+            border: 1px solid #f5c6c2;
+            display: block;
+        }
+
+        #status-msg.loading {
+            background-color: #e8f0fe;
+            color: #1a73e8;
+            border: 1px solid #aecbfa;
+            display: block;
+        }
+
+        /* Respuesta JSON */
+        #respuesta-json {
+            display: none;
+            margin-top: 16px;
+        }
+
+        #respuesta-json summary {
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #70757a;
+            user-select: none;
+        }
+
+        #respuesta-json pre {
+            background: #f8f9fa;
+            border: 1px solid #e8eaed;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 0.82rem;
+            overflow-x: auto;
+            margin-top: 8px;
+            color: #3c4043;
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <span class="nav-brand">🚗 Mis Vehículos</span>
+    <a href="index.html">Probador API</a>
+    <a href="indexTabla.html">Panel de Vehículos</a>
+    <a href="altavehiculo.html" class="active">Alta de Vehículo</a>
+</nav>
+
+<div class="page-wrapper">
+<div class="container">
+    <h2>🚗 Alta de Vehículo</h2>
+    <p class="subtitle">Introduce los datos del nuevo vehículo para registrarlo en el sistema</p>
+
+    <form id="formVehiculo" novalidate>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="tipo">Tipo <span class="required">*</span></label>
+                <select id="tipo" name="tipo" required>
+                    <option value="" disabled selected>Selecciona...</option>
+                    <option value="Coche">Coche</option>
+                    <option value="Moto">Moto</option>
+                    <option value="Scooter">Scooter</option>
+                    <option value="Furgoneta">Furgoneta</option>
+                    <option value="Camión">Camión</option>
+                    <option value="Avión">Avión</option>
+                    <option value="Otro">Otro</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="combustible">Combustible <span class="required">*</span></label>
+                <select id="combustible" name="combustible" required>
+                    <option value="" disabled selected>Selecciona...</option>
+                    <option value="Gasolina">Gasolina</option>
+                    <option value="Diésel">Diésel</option>
+                    <option value="Eléctrico">Eléctrico</option>
+                    <option value="Híbrido">Híbrido</option>
+                    <option value="Hidrógeno">Hidrógeno</option>
+                    <option value="Jet Fuel">Jet Fuel</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="matricula">Matrícula <span class="required">*</span></label>
+            <input type="text" id="matricula" name="matricula"
+                   placeholder="Ej: ABC-1234" required maxlength="10">
+        </div>
+
+        <div class="form-group">
+            <label for="modelo">Modelo</label>
+            <input type="text" id="modelo" name="modelo"
+                   placeholder="Ej: Toyota Corolla" maxlength="60">
+        </div>
+
+        <div class="form-group">
+            <label for="disponible">Disponibilidad <span class="required">*</span></label>
+            <select id="disponible" name="disponible" required>
+                <option value="True" selected>Disponible</option>
+                <option value="False">No disponible</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="nota">Nota</label>
+            <input type="text" id="nota" name="nota"
+                   placeholder="Observaciones opcionales..." maxlength="120">
+        </div>
+
+        <button type="submit" class="btn-submit" id="btnEnviar">
+            Registrar Vehículo
+        </button>
+    </form>
+
+    <div id="status-msg"></div>
+
+    <details id="respuesta-json">
+        <summary>Ver respuesta del servidor</summary>
+        <pre id="json-output"></pre>
+    </details>
+</div>
+</div>
+
+<script>
+    // -------------------------------------------------------
+    // CONFIGURACIÓN — cambia esta URL por la de tu API Gateway
+    // -------------------------------------------------------
+    //const API_URL = "https://TU_API_ID.execute-api.REGION.amazonaws.com/v1/vehiculos";
+    const API_URL = "https://469x9omeoa.execute-api.us-east-1.amazonaws.com/v1/vehiculos";
+    // -------------------------------------------------------
+    const form      = document.getElementById('formVehiculo');
+    const btnEnviar = document.getElementById('btnEnviar');
+    const statusMsg = document.getElementById('status-msg');
+    const respuesta = document.getElementById('respuesta-json');
+    const jsonOut   = document.getElementById('json-output');
+
+    function setStatus(type, message) {
+        statusMsg.className = type;
+        statusMsg.textContent = message;
+    }
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        // Validación básica de campos requeridos
+        const tipo        = document.getElementById('tipo').value.trim();
+        const combustible = document.getElementById('combustible').value.trim();
+        const matricula   = document.getElementById('matricula').value.trim();
+        const disponible  = document.getElementById('disponible').value;
+
+        if (!tipo || !combustible || !matricula) {
+            setStatus('error', 'Por favor, rellena todos los campos obligatorios (*).');
+            return;
+        }
+
+        // Construir el payload — solo incluye campos con valor
+        const payload = { tipo, combustible, matricula, disponible };
+
+        const modelo = document.getElementById('modelo').value.trim();
+        const nota   = document.getElementById('nota').value.trim();
+        if (modelo) payload.modelo = modelo;
+        if (nota)   payload.nota   = nota;
+
+        // Enviar
+        btnEnviar.disabled = true;
+        btnEnviar.textContent = 'Enviando...';
+        setStatus('loading', 'Conectando con la API...');
+        respuesta.style.display = 'none';
+
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+            jsonOut.textContent = JSON.stringify(data, null, 2);
+            respuesta.style.display = 'block';
+
+            if (response.ok) {
+                setStatus('success', `Vehículo registrado correctamente. ID asignado: ${data.id}`);
+                form.reset();
+            } else {
+                setStatus('error', `Error ${response.status}: ${data.error || 'Respuesta inesperada del servidor.'}`);
+            }
+
+        } catch (error) {
+            setStatus('error', 'No se pudo conectar con la API. Revisa la URL o la configuración CORS.');
+            console.error(error);
+        } finally {
+            btnEnviar.disabled = false;
+            btnEnviar.textContent = 'Registrar Vehículo';
+        }
+    });
+</script>
+
+</body>
+</html>
