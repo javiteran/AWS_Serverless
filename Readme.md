@@ -228,8 +228,10 @@ curl -X POST https://TU_API_ID.execute-api.REGION.amazonaws.com/v1/vehiculos \
 curl -X POST https://TU_API_ID.execute-api.REGION.amazonaws.com/v1/vehiculos \
      -H "Content-Type: application/json" \
      -d '{"tipo": "Avion", "modelo": "X-200", "available": "True", "matricula": "XYZ-789", "combustible": "Jet Fuel"}'
-```
 
+curl -X POST https://469x9omeoa.execute-api.us-east-1.amazonaws.com/v1/vehiculos -H "Content-Type: application/json" -d '{"tipo": "Avion", "modelo": "Cestna 172", "available": "True", "matricula": "XYZ-789", "combustible": "Jet Fuel"}'
+
+```
 ### Actualizar un vehículo (PUT)
 
 Nota: Debes usar un id que ya exista en tu base de datos dynamodb.
