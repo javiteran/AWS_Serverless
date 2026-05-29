@@ -26,15 +26,15 @@ Parameters:
     AllowedValues: [PAY_PER_REQUEST, PROVISIONED]
     Description: Modo de facturación de DynamoDB
 
-  # AWS Academy proporciona el LabRole con ARN fijo en todas las cuentas de laboratorio.
-  # Si tu cuenta tiene un ARN diferente, cámbialo aquí antes de desplegar.
-  LabRoleArn:
+  # El nombre del rol que proporciona AWS Academy.
+  # En la mayoría de laboratorios es "LabRole". Cámbialo solo si tu lab usa otro nombre.
+  LabRoleName:
     Type: String
-    Default: arn:aws:iam::ACCOUNT_ID:role/LabRole
+    Default: LabRole
     Description: >
-      ARN del rol LabRole proporcionado por AWS Academy.
-      Sustitúyelo con el ARN real de tu cuenta de laboratorio.
-      Lo puedes encontrar en IAM > Roles > LabRole.
+      Nombre del rol IAM proporcionado por AWS Academy (normalmente "LabRole").
+      El ARN se construye automáticamente usando el Account ID de la cuenta activa.
+      Puedes verificarlo en IAM > Roles > LabRole.
 
 # ============================================================
 # RECURSOS
@@ -76,8 +76,9 @@ Resources:
       Description: "API REST para gestión de vehículos con CORS habilitado (AWS Academy)"
       Runtime: python3.12
       Handler: index.lambda_handler
-      # LabRole en lugar de un rol creado por la plantilla
-      Role: !Ref LabRoleArn
+      # ARN construido automáticamente con el Account ID real de la cuenta activa.
+      # Evita tener que introducir el ARN manualmente y el error de validación.
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
       Timeout: 30
       MemorySize: 128
       Environment:
@@ -457,4 +458,4 @@ Outputs:
 
   LabRoleUsed:
     Description: "ARN del LabRole utilizado por la Lambda"
-    Value: !Ref LabRoleArn
+    Value: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"

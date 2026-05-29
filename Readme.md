@@ -401,35 +401,42 @@ AWS Academy restringe la creación y modificación de recursos IAM. La plantilla
 | Aspecto | `cloudformation.yaml` | `cloudformation-academy.yaml` |
 |---------|----------------------|-------------------------------|
 | Rol IAM | Crea `LambdaExecutionRole` con permisos mínimos | **No crea ningún rol IAM** |
-| Rol de la Lambda | `!GetAtt LambdaExecutionRole.Arn` | Usa el `LabRole` existente vía parámetro |
+| Rol de la Lambda | `!GetAtt LambdaExecutionRole.Arn` | `!Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"` |
 | `CAPABILITY_NAMED_IAM` | Necesario | **No necesario** |
 | Logs en API Gateway | `MethodSettings` con `LoggingLevel: INFO` | Eliminado (requiere rol de cuenta IAM) |
 | Point-in-Time Recovery | Activado en DynamoDB | Eliminado (puede fallar en algunas cuentas Academy) |
 | Exports en Outputs | Sí (`Export: Name:`) | Eliminados (pueden colisionar entre laboratorios) |
 | Retención de logs Lambda | 30 días | 7 días (los labs se reinician frecuentemente) |
 
-### Paso previo: obtener el ARN del LabRole
-
-Antes de desplegar, necesitas el ARN exacto del `LabRole` de tu sesión de laboratorio:
-
-1. En la consola de AWS Academy, ve a **IAM > Roles**
-2. Busca `LabRole` y copia su ARN (tiene el formato `arn:aws:iam::XXXXXXXXXX:role/LabRole`)
-
 ### Despliegue en AWS Academy
 
+El ARN del `LabRole` se construye automáticamente usando `${AWS::AccountId}`, por lo que **no necesitas buscarlo ni introducirlo manualmente**. El parámetro `LabRoleName` tiene el valor `LabRole` por defecto, que es el nombre estándar en todos los laboratorios de AWS Academy.
+
 ```bash
-# Sustituye ACCOUNT_ID por el ID de tu cuenta del laboratorio
+# Despliegue estándar, sin tocar parámetros IAM
 aws cloudformation deploy \
   --template-file cloudformation-academy.yaml \
   --stack-name mis-vehiculos-academy \
   --parameter-overrides \
       ProjectName=mis-vehiculos \
       StageName=v1 \
-      LabRoleArn=arn:aws:iam::ACCOUNT_ID:role/LabRole \
   --region us-east-1
 ```
 
 > **Sin `--capabilities CAPABILITY_NAMED_IAM`** porque esta plantilla no crea recursos IAM.
+
+Si tu laboratorio usa un nombre de rol diferente a `LabRole`, pásalo como parámetro:
+
+```bash
+aws cloudformation deploy \
+  --template-file cloudformation-academy.yaml \
+  --stack-name mis-vehiculos-academy \
+  --parameter-overrides \
+      ProjectName=mis-vehiculos \
+      StageName=v1 \
+      LabRoleName=NombreDetuRol \
+  --region us-east-1
+```
 
 ### Subir los HTML al bucket S3 tras el despliegue
 
