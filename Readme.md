@@ -403,17 +403,28 @@ AWS Academy restringe la creación y modificación de recursos IAM. La plantilla
 | Rol IAM | Crea `LambdaExecutionRole` con permisos mínimos | **No crea ningún rol IAM** |
 | Rol de la Lambda | `!GetAtt LambdaExecutionRole.Arn` | `!Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"` |
 | `CAPABILITY_NAMED_IAM` | Necesario | **No necesario** |
+| Subida de HTML al S3 | Manual (script `deploy.sh`) | **Automática** vía Custom Resource durante el despliegue |
+| URL de la API en los HTML | Se sustituye con `sed` en el script | **Inyectada automáticamente** con `!Sub` en la plantilla |
 | Logs en API Gateway | `MethodSettings` con `LoggingLevel: INFO` | Eliminado (requiere rol de cuenta IAM) |
 | Point-in-Time Recovery | Activado en DynamoDB | Eliminado (puede fallar en algunas cuentas Academy) |
 | Exports en Outputs | Sí (`Export: Name:`) | Eliminados (pueden colisionar entre laboratorios) |
 | Retención de logs Lambda | 30 días | 7 días (los labs se reinician frecuentemente) |
 
+### Recursos adicionales en la plantilla Academy
+
+| Recurso | Tipo | Descripción |
+|---------|------|-------------|
+| `S3UploaderLambda` | `AWS::Lambda::Function` | Lambda auxiliar que escribe archivos en S3. Solo se usa durante el despliegue |
+| `UploadWebFiles` | `Custom::S3Upload` | Custom Resource que invoca `S3UploaderLambda` con los HTML ya con la URL de la API inyectada |
+
+El flujo es: CloudFormation crea la API Gateway → obtiene su URL → se la pasa al Custom Resource → la Lambda auxiliar sube los HTML con esa URL ya escrita dentro del código JavaScript.
+
 ### Despliegue en AWS Academy
 
-El ARN del `LabRole` se construye automáticamente usando `${AWS::AccountId}`, por lo que **no necesitas buscarlo ni introducirlo manualmente**. El parámetro `LabRoleName` tiene el valor `LabRole` por defecto, que es el nombre estándar en todos los laboratorios de AWS Academy.
+Los HTML se suben al bucket S3 **automáticamente durante el despliegue**, con la URL real de la API ya inyectada. No necesitas ningún paso manual adicional.
 
 ```bash
-# Despliegue estándar, sin tocar parámetros IAM
+# Un solo comando despliega todo: DynamoDB, Lambda, API Gateway, S3 y sube los HTML
 aws cloudformation deploy \
   --template-file cloudformation-academy.yaml \
   --stack-name mis-vehiculos-academy \
@@ -424,6 +435,8 @@ aws cloudformation deploy \
 ```
 
 > **Sin `--capabilities CAPABILITY_NAMED_IAM`** porque esta plantilla no crea recursos IAM.
+
+Al terminar, el output `WebsiteUrlTabla` ya apunta a una página funcional conectada a la API.
 
 Si tu laboratorio usa un nombre de rol diferente a `LabRole`, pásalo como parámetro:
 
@@ -436,29 +449,6 @@ aws cloudformation deploy \
       StageName=v1 \
       LabRoleName=NombreDetuRol \
   --region us-east-1
-```
-
-### Subir los HTML al bucket S3 tras el despliegue
-
-```bash
-# Obtener el nombre del bucket creado
-BUCKET=$(aws cloudformation describe-stacks \
-  --stack-name mis-vehiculos-academy \
-  --query "Stacks[0].Outputs[?OutputKey=='WebsiteBucketName'].OutputValue" \
-  --output text)
-
-# Obtener la URL de la API para actualizar los HTML
-API_URL=$(aws cloudformation describe-stacks \
-  --stack-name mis-vehiculos-academy \
-  --query "Stacks[0].Outputs[?OutputKey=='ApiVehiculosUrl'].OutputValue" \
-  --output text)
-
-echo "Bucket: $BUCKET"
-echo "API:    $API_URL"
-
-# Subir los archivos HTML (actualiza la URL de la API antes si es necesario)
-aws s3 cp index.html s3://$BUCKET/index.html --content-type "text/html"
-aws s3 cp indexTabla.html s3://$BUCKET/indexTabla.html --content-type "text/html"
 ```
 
 ### Eliminar el stack en AWS Academy

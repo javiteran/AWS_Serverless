@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Solución Serverless para AWS Academy: S3 + API Gateway REST + Lambda + DynamoDB.
-  Usa el rol LabRole existente en lugar de crear roles IAM propios.
-  IMPORTANTE: No crea ni modifica recursos IAM (incompatible con AWS Academy).
+  Usa LabRole existente. Incluye Custom Resource que sube los HTML al bucket S3
+  automáticamente durante el despliegue, con la URL de la API ya inyectada.
 
 # ============================================================
 # PARÁMETROS
@@ -26,8 +26,6 @@ Parameters:
     AllowedValues: [PAY_PER_REQUEST, PROVISIONED]
     Description: Modo de facturación de DynamoDB
 
-  # El nombre del rol que proporciona AWS Academy.
-  # En la mayoría de laboratorios es "LabRole". Cámbialo solo si tu lab usa otro nombre.
   LabRoleName:
     Type: String
     Default: LabRole
@@ -49,9 +47,6 @@ Resources:
     Properties:
       TableName: !Sub "${ProjectName}-vehiculos"
       BillingMode: !Ref DynamoDBBillingMode
-      # Clave primaria compuesta:
-      #   - record_type (PK)  → diferencia tipos de registro (vehiculo, localizacion, etc.)
-      #   - id           (SK)  → identificador único generado por la Lambda
       AttributeDefinitions:
         - AttributeName: record_type
           AttributeType: S
@@ -67,7 +62,7 @@ Resources:
           Value: !Ref ProjectName
 
   # ----------------------------------------------------------
-  # 2. FUNCIÓN LAMBDA  (usa LabRole directamente, sin crear rol IAM)
+  # 2. FUNCIÓN LAMBDA PRINCIPAL (API de vehículos)
   # ----------------------------------------------------------
   VehiculosLambda:
     Type: AWS::Lambda::Function
@@ -77,7 +72,6 @@ Resources:
       Runtime: python3.12
       Handler: index.lambda_handler
       # ARN construido automáticamente con el Account ID real de la cuenta activa.
-      # Evita tener que introducir el ARN manualmente y el error de validación.
       Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
       Timeout: 30
       MemorySize: 128
@@ -86,8 +80,6 @@ Resources:
           TABLE_NAME: !Ref VehiculosTable
       Code:
         ZipFile: |
-          # AWS SDK for Python (Boto3) - https://aws.amazon.com/sdk-for-python/
-          # Lambda function: REST API para gestión de vehículos con CORS habilitado.
           import json
           import os
           import boto3
@@ -104,17 +96,10 @@ Resources:
           }
 
           def lambda_handler(event, context):
-              # Manejar peticiones OPTIONS (Preflight CORS)
               if event['httpMethod'] == 'OPTIONS':
-                  return {
-                      'statusCode': 200,
-                      'headers': HEADERS,
-                      'body': json.dumps('OK')
-                  }
-
+                  return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps('OK')}
               http_method = event['httpMethod']
               path = event['path']
-
               if path == '/vehiculos':
                   if http_method == 'GET':
                       return listar_vehiculos()
@@ -124,74 +109,39 @@ Resources:
                       return actualiza_vehiculo(json.loads(event['body']) if 'body' in event else {})
               elif path == '/':
                   if http_method == 'GET':
-                      return {
-                          'statusCode': 200,
-                          'headers': HEADERS,
-                          'body': json.dumps({'message': 'Mis Vehiculos - Página principal'})
-                      }
-
-              return {
-                  'statusCode': 404,
-                  'headers': HEADERS,
-                  'body': json.dumps({'error': 'Not Found'})
-              }
+                      return {'statusCode': 200, 'headers': HEADERS,
+                              'body': json.dumps({'message': 'Mis Vehiculos - Pagina principal'})}
+              return {'statusCode': 404, 'headers': HEADERS, 'body': json.dumps({'error': 'Not Found'})}
 
           def crear_vehiculo(data):
               if not data:
-                  return {
-                      'statusCode': 400,
-                      'headers': HEADERS,
-                      'body': json.dumps({'error': 'Missing request body'})
-                  }
-              item = {
-                  'id': str(uuid.uuid4())[:10],
-                  'record_type': 'vehiculo',
-                  'createdAt': datetime.now().isoformat(),
-                  **data
-              }
+                  return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'Missing request body'})}
+              item = {'id': str(uuid.uuid4())[:10], 'record_type': 'vehiculo',
+                      'createdAt': datetime.now().isoformat(), **data}
               table.put_item(Item=item)
-              return {
-                  'statusCode': 201,
-                  'headers': HEADERS,
-                  'body': json.dumps(item)
-              }
+              return {'statusCode': 201, 'headers': HEADERS, 'body': json.dumps(item)}
 
           def actualiza_vehiculo(data):
               if not data or 'id' not in data:
-                  return {
-                      'statusCode': 400,
-                      'headers': HEADERS,
-                      'body': json.dumps({'error': 'Missing id in request body'})
-                  }
+                  return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'Missing id'})}
               item_id = data['id']
-              actualiza_expression = 'SET updatedAt = :updatedAt'
-              expression_values = {':updatedAt': datetime.now().isoformat()}
+              expr = 'SET updatedAt = :updatedAt'
+              vals = {':updatedAt': datetime.now().isoformat()}
               for key, value in data.items():
                   if key != 'id':
-                      actualiza_expression += f', {key} = :{key}'
-                      expression_values[f':{key}'] = value
-              table.update_item(
-                  Key={'id': item_id, 'record_type': 'vehiculo'},
-                  UpdateExpression=actualiza_expression,
-                  ExpressionAttributeValues=expression_values,
-                  ReturnValues='ALL_NEW'
-              )
-              return {
-                  'statusCode': 200,
-                  'headers': HEADERS,
-                  'body': json.dumps({'id': item_id, 'message': 'vehiculo updated successfully'})
-              }
+                      expr += f', {key} = :{key}'
+                      vals[f':{key}'] = value
+              table.update_item(Key={'id': item_id, 'record_type': 'vehiculo'},
+                                UpdateExpression=expr, ExpressionAttributeValues=vals,
+                                ReturnValues='ALL_NEW')
+              return {'statusCode': 200, 'headers': HEADERS,
+                      'body': json.dumps({'id': item_id, 'message': 'vehiculo updated successfully'})}
 
           def listar_vehiculos():
               response = table.query(
                   KeyConditionExpression='record_type = :record_type_val',
-                  ExpressionAttributeValues={':record_type_val': 'vehiculo'}
-              )
-              return {
-                  'statusCode': 200,
-                  'headers': HEADERS,
-                  'body': json.dumps(response.get('Items', []))
-              }
+                  ExpressionAttributeValues={':record_type_val': 'vehiculo'})
+              return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps(response.get('Items', []))}
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -211,7 +161,6 @@ Resources:
         - Key: Project
           Value: !Ref ProjectName
 
-  # --- Recurso /vehiculos ---
   VehiculosResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -219,7 +168,6 @@ Resources:
       ParentId: !GetAtt VehiculosApi.RootResourceId
       PathPart: vehiculos
 
-  # --- GET /vehiculos ---
   VehiculosGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -234,7 +182,6 @@ Resources:
           - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
           - LambdaArn: !GetAtt VehiculosLambda.Arn
 
-  # --- POST /vehiculos ---
   VehiculosPostMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -249,7 +196,6 @@ Resources:
           - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
           - LambdaArn: !GetAtt VehiculosLambda.Arn
 
-  # --- PUT /vehiculos ---
   VehiculosPutMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -264,7 +210,6 @@ Resources:
           - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
           - LambdaArn: !GetAtt VehiculosLambda.Arn
 
-  # --- OPTIONS /vehiculos (CORS Preflight) ---
   VehiculosOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -291,7 +236,6 @@ Resources:
             method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
 
-  # --- GET / (raíz) ---
   RootGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -306,7 +250,6 @@ Resources:
           - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
           - LambdaArn: !GetAtt VehiculosLambda.Arn
 
-  # --- OPTIONS / (raíz CORS Preflight) ---
   RootOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -333,7 +276,6 @@ Resources:
             method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
 
-  # --- Deployment del API ---
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -347,10 +289,7 @@ Resources:
       RestApiId: !Ref VehiculosApi
       Description: !Sub "Deployment inicial - ${ProjectName} (Academy)"
 
-  # --- Stage del API ---
-  # NOTA: Se omite MethodSettings con LoggingLevel porque en AWS Academy
-  # API Gateway no tiene permisos para escribir en CloudWatch Logs
-  # sin un rol de cuenta configurado previamente (account-level setting).
+  # NOTA: Sin MethodSettings/LoggingLevel — requiere rol de cuenta IAM no disponible en Academy
   ApiStage:
     Type: AWS::ApiGateway::Stage
     Properties:
@@ -362,7 +301,6 @@ Resources:
         - Key: Project
           Value: !Ref ProjectName
 
-  # --- Permiso para que API Gateway invoque la Lambda ---
   LambdaApiGatewayPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -388,19 +326,14 @@ Resources:
         RestrictPublicBuckets: false
       CorsConfiguration:
         CorsRules:
-          - AllowedHeaders:
-              - "*"
-            AllowedMethods:
-              - GET
-              - HEAD
-            AllowedOrigins:
-              - "*"
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ["*"]
             MaxAge: 3000
       Tags:
         - Key: Project
           Value: !Ref ProjectName
 
-  # --- Política del bucket S3 para acceso público de lectura ---
   WebsiteBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -415,13 +348,254 @@ Resources:
             Resource: !Sub "${WebsiteBucket.Arn}/*"
 
   # ----------------------------------------------------------
-  # 5. CLOUDWATCH LOG GROUP PARA LA LAMBDA
+  # 5. CLOUDWATCH LOG GROUP
   # ----------------------------------------------------------
   LambdaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${ProjectName}-api"
       RetentionInDays: 7
+
+  # ----------------------------------------------------------
+  # 6. LAMBDA AUXILIAR — sube los HTML al bucket S3
+  #
+  # Esta Lambda se invoca una sola vez como Custom Resource durante
+  # el despliegue del stack. Recibe el contenido HTML con la URL
+  # real de la API ya sustituida y lo escribe en el bucket S3.
+  # Se elimina automáticamente al borrar el stack.
+  # ----------------------------------------------------------
+  S3UploaderLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-s3-uploader"
+      Description: "Custom Resource: sube los archivos HTML al bucket S3 durante el despliegue"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
+      Timeout: 60
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] in ('Create', 'Update'):
+                      s3 = boto3.client('s3')
+                      bucket = event['ResourceProperties']['BucketName']
+                      files  = event['ResourceProperties']['Files']
+                      # files es una lista de {Key, Content, ContentType}
+                      for f in files:
+                          s3.put_object(
+                              Bucket=bucket,
+                              Key=f['Key'],
+                              Body=f['Content'].encode('utf-8'),
+                              ContentType=f['ContentType']
+                          )
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"ERROR: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  # Permiso para que CloudFormation invoque la Lambda auxiliar
+  S3UploaderLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt S3UploaderLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: cloudformation.amazonaws.com
+
+  # Custom Resource: se ejecuta al crear/actualizar el stack.
+  # Sube index.html e indexTabla.html al bucket con la URL real de la API.
+  UploadWebFiles:
+    Type: Custom::S3Upload
+    DependsOn:
+      - WebsiteBucketPolicy
+      - ApiStage
+      - S3UploaderLambdaPermission
+    Properties:
+      ServiceToken: !GetAtt S3UploaderLambda.Arn
+      BucketName: !Ref WebsiteBucket
+      # Forzar re-ejecución si cambia la URL de la API (p.ej. al actualizar el stack)
+      ApiUrl: !Sub "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos"
+      Files:
+        - Key: index.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Probador de API Vehículos</title>
+                <style>
+                    body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
+                    .container { max-width: 600px; margin: auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+                    button { padding: 10px 15px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-right: 5px; }
+                    button:hover { background-color: #0056b3; }
+                    pre { background: #f4f4f4; padding: 10px; border: 1px solid #ddd; overflow-x: auto; min-height: 100px; }
+                    .status { font-weight: bold; margin-bottom: 10px; }
+                </style>
+            </head>
+            <body>
+            <div class="container">
+                <h2>Prueba de API Gateway</h2>
+                <div class="status" id="status">Estado: Esperando acción...</div>
+                <button onclick="raiz()">Raiz</button>
+                <button onclick="listarVehiculos()">Listar Vehículos</button>
+                <button onclick="actualizarVehiculo()" style="background-color: #28a745;">Actualizar Vehículo (Mock)</button>
+                <h3>Resultado:</h3>
+                <pre id="resultado">Los datos aparecerán aquí...</pre>
+            </div>
+            <script>
+                const API_URL = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos";
+                const API_URL_Base = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}";
+                async function raiz() {
+                    const statusDiv = document.getElementById('status');
+                    const resDiv = document.getElementById('resultado');
+                    statusDiv.innerText = "Estado: Cargando...";
+                    resDiv.innerText = "";
+                    try {
+                        const response = await fetch(API_URL_Base);
+                        const data = await response.json();
+                        resDiv.innerText = JSON.stringify(data, null, 2);
+                        statusDiv.innerText = "Estado: Éxito!";
+                    } catch (error) {
+                        resDiv.innerText = "Error: " + error.message;
+                        statusDiv.innerText = "Estado: Error al conectar";
+                    }
+                }
+                async function listarVehiculos() {
+                    const statusDiv = document.getElementById('status');
+                    const resDiv = document.getElementById('resultado');
+                    statusDiv.innerText = "Estado: Cargando...";
+                    resDiv.innerText = "";
+                    try {
+                        const response = await fetch(API_URL);
+                        const data = await response.json();
+                        resDiv.innerText = JSON.stringify(data, null, 2);
+                        statusDiv.innerText = "Estado: Éxito!";
+                    } catch (error) {
+                        resDiv.innerText = "Error: " + error.message;
+                        statusDiv.innerText = "Estado: Error al conectar";
+                    }
+                }
+                async function actualizarVehiculo() {
+                    const statusDiv = document.getElementById('status');
+                    const resDiv = document.getElementById('resultado');
+                    const vehiculoData = { id: "33c79a34-c", available: "False", nota: "En mantenimiento", modelo: "Cestna 172" };
+                    statusDiv.innerText = "Estado: Actualizando...";
+                    try {
+                        const response = await fetch(API_URL, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(vehiculoData)
+                        });
+                        const data = await response.json();
+                        resDiv.innerText = JSON.stringify(data, null, 2);
+                        statusDiv.innerText = "Estado: Actualización completada";
+                    } catch (error) {
+                        resDiv.innerText = "Error: " + error.message;
+                        statusDiv.innerText = "Estado: Error al actualizar";
+                    }
+                }
+            </script>
+            </body>
+            </html>
+
+        - Key: indexTabla.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Gestión de Vehículos API</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background-color: #f0f2f5; color: #333; }
+                    .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+                    h2 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 15px; margin-top: 0; }
+                    .controls { margin: 20px 0; display: flex; gap: 12px; }
+                    button { padding: 12px 24px; cursor: pointer; border: none; border-radius: 6px; font-weight: 600; transition: all 0.2s ease; font-size: 14px; }
+                    .btn-list { background-color: #1a73e8; color: white; }
+                    .btn-list:hover { background-color: #1557b0; }
+                    .btn-update { background-color: #34a853; color: white; }
+                    .btn-update:hover { background-color: #2d8e47; }
+                    #status-bar { padding: 10px; margin-bottom: 20px; border-radius: 6px; font-size: 0.9em; background-color: #f8f9fa; border: 1px solid #ddd; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                    th, td { text-align: left; padding: 15px; border-bottom: 1px solid #eee; }
+                    th { background-color: #f8f9fa; color: #5f6368; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+                    tr:hover { background-color: #f1f3f4; }
+                    .badge { padding: 5px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+                    .bg-available { background-color: #e6f4ea; color: #1e8e3e; }
+                    .bg-maint { background-color: #fce8e6; color: #d93025; }
+                    code { background: #f1f3f4; padding: 2px 5px; border-radius: 4px; font-family: monospace; }
+                </style>
+            </head>
+            <body>
+            <div class="container">
+                <h2>Panel de Vehículos</h2>
+                <div id="status-bar">Sistema listo para conectar.</div>
+                <div class="controls">
+                    <button id="btnListar" class="btn-list">Listar Vehículos</button>
+                    <button id="btnActualizar" class="btn-update">Actualizar Vehículo Prueba</button>
+                </div>
+                <div id="tabla-contenedor">
+                    <p style="text-align: center; color: #70757a; margin-top: 40px;">Presiona "Listar" para cargar los datos desde AWS.</p>
+                </div>
+            </div>
+            <script>
+                const API_URL = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos";
+                async function obtenerDatos() {
+                    const statusBar = document.getElementById('status-bar');
+                    const contenedor = document.getElementById('tabla-contenedor');
+                    statusBar.innerText = "Conectando con API Gateway...";
+                    statusBar.style.color = "#1a73e8";
+                    try {
+                        const response = await fetch(API_URL);
+                        if (!response.ok) throw new Error("Error servidor: " + response.status);
+                        const vehiculos = await response.json();
+                        renderizarTabla(vehiculos);
+                        statusBar.innerText = "Datos actualizados correctamente.";
+                        statusBar.style.color = "#34a853";
+                    } catch (error) {
+                        statusBar.innerText = "Error: " + error.message;
+                        statusBar.style.color = "#d93025";
+                        contenedor.innerHTML = "<p style='color:red;text-align:center;'>No se pudo cargar la información. Revisa CORS o la URL.</p>";
+                    }
+                }
+                function renderizarTabla(lista) {
+                    const contenedor = document.getElementById('tabla-contenedor');
+                    if (lista.length === 0) { contenedor.innerHTML = "<p>No hay vehículos registrados.</p>"; return; }
+                    let html = "<table><thead><tr><th>ID</th><th>Tipo</th><th>Matrícula</th><th>Disponible</th><th>Combustible</th></tr></thead><tbody>";
+                    lista.forEach(v => {
+                        const isAvailable = String(v.disponible).toLowerCase() === "true";
+                        html += "<tr><td><code>" + v.id + "</code></td><td>" + (v.tipo||'-') + "</td><td>" + (v.matricula||'-') + "</td><td><span class='badge " + (isAvailable ? 'bg-available' : 'bg-maint') + "'>" + (isAvailable ? 'DISPONIBLE' : 'NO DISPONIBLE') + "</span></td><td>" + (v.combustible||'-') + "</td></tr>";
+                    });
+                    html += "</tbody></table>";
+                    contenedor.innerHTML = html;
+                }
+                async function ejecutarActualizacion() {
+                    const statusBar = document.getElementById('status-bar');
+                    const payload = { id: "33c79a34-c", disponible: "False", nota: "En mantenimiento", tipo: "Coche" };
+                    statusBar.innerText = "Enviando actualización...";
+                    try {
+                        const response = await fetch(API_URL, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (!response.ok) throw new Error("Error al actualizar");
+                        alert("Vehículo actualizado con éxito!");
+                        obtenerDatos();
+                    } catch (error) { alert("Error: " + error.message); }
+                }
+                document.addEventListener("DOMContentLoaded", () => {
+                    document.getElementById("btnListar").addEventListener("click", obtenerDatos);
+                    document.getElementById("btnActualizar").addEventListener("click", ejecutarActualizacion);
+                });
+            </script>
+            </body>
+            </html>
+
 
 # ============================================================
 # OUTPUTS
@@ -441,7 +615,7 @@ Outputs:
     Value: !Ref VehiculosTable
 
   LambdaFunctionName:
-    Description: "Nombre de la función Lambda"
+    Description: "Nombre de la función Lambda principal"
     Value: !Ref VehiculosLambda
 
   WebsiteBucketName:
@@ -457,5 +631,5 @@ Outputs:
     Value: !Sub "${WebsiteBucket.WebsiteURL}/indexTabla.html"
 
   LabRoleUsed:
-    Description: "ARN del LabRole utilizado por la Lambda"
+    Description: "ARN del LabRole utilizado por las funciones Lambda"
     Value: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
