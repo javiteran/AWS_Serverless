@@ -1,0 +1,504 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Solución Serverless completa: S3 (web estática) + API Gateway REST + Lambda + DynamoDB.
+  Gestión de vehículos con CORS habilitado.
+
+# ============================================================
+# PARÁMETROS
+# ============================================================
+Parameters:
+  ProjectName:
+    Type: String
+    Default: mis-vehiculos
+    Description: Nombre base del proyecto (se usa como prefijo en los recursos)
+
+  StageName:
+    Type: String
+    Default: v1
+    AllowedValues: [v1, v2, prod, dev]
+    Description: Nombre del stage de API Gateway
+
+  DynamoDBBillingMode:
+    Type: String
+    Default: PAY_PER_REQUEST
+    AllowedValues: [PAY_PER_REQUEST, PROVISIONED]
+    Description: Modo de facturación de DynamoDB
+
+# ============================================================
+# RECURSOS
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # 1. TABLA DYNAMODB
+  # ----------------------------------------------------------
+  VehiculosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-vehiculos"
+      BillingMode: !Ref DynamoDBBillingMode
+      # Clave primaria compuesta:
+      #   - record_type (PK)  → diferencia tipos de registro (vehiculo, localizacion, etc.)
+      #   - id           (SK)  → identificador único generado por la Lambda
+      AttributeDefinitions:
+        - AttributeName: record_type
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: record_type
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      # Habilitar Point-in-Time Recovery para protección de datos
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ----------------------------------------------------------
+  # 2. ROL IAM PARA LA FUNCIÓN LAMBDA
+  # ----------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Permite escribir logs en CloudWatch
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-dynamodb-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt VehiculosTable.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ----------------------------------------------------------
+  # 3. FUNCIÓN LAMBDA
+  # ----------------------------------------------------------
+  VehiculosLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-api"
+      Description: "API REST para gestión de vehículos con CORS habilitado"
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref VehiculosTable
+      # Código inline de la función lambda_API_REST_Vehiculos.py
+      Code:
+        ZipFile: |
+          # AWS SDK for Python (Boto3) - https://aws.amazon.com/sdk-for-python/
+          # Lambda function: REST API para gestión de vehículos con CORS habilitado.
+          import json
+          import os
+          import boto3
+          import uuid
+          from datetime import datetime
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+          HEADERS = {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type'
+          }
+
+          def lambda_handler(event, context):
+              # Manejar peticiones OPTIONS (Preflight CORS)
+              if event['httpMethod'] == 'OPTIONS':
+                  return {
+                      'statusCode': 200,
+                      'headers': HEADERS,
+                      'body': json.dumps('OK')
+                  }
+
+              http_method = event['httpMethod']
+              path = event['path']
+
+              if path == '/vehiculos':
+                  if http_method == 'GET':
+                      return listar_vehiculos()
+                  elif http_method == 'POST':
+                      return crear_vehiculo(json.loads(event['body']) if 'body' in event else {})
+                  elif http_method == 'PUT':
+                      return actualiza_vehiculo(json.loads(event['body']) if 'body' in event else {})
+              elif path == '/':
+                  if http_method == 'GET':
+                      return {
+                          'statusCode': 200,
+                          'headers': HEADERS,
+                          'body': json.dumps({'message': 'Mis Vehiculos - Página principal'})
+                      }
+
+              return {
+                  'statusCode': 404,
+                  'headers': HEADERS,
+                  'body': json.dumps({'error': 'Not Found'})
+              }
+
+          def crear_vehiculo(data):
+              if not data:
+                  return {
+                      'statusCode': 400,
+                      'headers': HEADERS,
+                      'body': json.dumps({'error': 'Missing request body'})
+                  }
+              item = {
+                  'id': str(uuid.uuid4())[:10],
+                  'record_type': 'vehiculo',
+                  'createdAt': datetime.now().isoformat(),
+                  **data
+              }
+              table.put_item(Item=item)
+              return {
+                  'statusCode': 201,
+                  'headers': HEADERS,
+                  'body': json.dumps(item)
+              }
+
+          def actualiza_vehiculo(data):
+              if not data or 'id' not in data:
+                  return {
+                      'statusCode': 400,
+                      'headers': HEADERS,
+                      'body': json.dumps({'error': 'Missing id in request body'})
+                  }
+              item_id = data['id']
+              actualiza_expression = 'SET updatedAt = :updatedAt'
+              expression_values = {':updatedAt': datetime.now().isoformat()}
+              for key, value in data.items():
+                  if key != 'id':
+                      actualiza_expression += f', {key} = :{key}'
+                      expression_values[f':{key}'] = value
+              table.update_item(
+                  Key={'id': item_id, 'record_type': 'vehiculo'},
+                  UpdateExpression=actualiza_expression,
+                  ExpressionAttributeValues=expression_values,
+                  ReturnValues='ALL_NEW'
+              )
+              return {
+                  'statusCode': 200,
+                  'headers': HEADERS,
+                  'body': json.dumps({'id': item_id, 'message': 'vehiculo updated successfully'})
+              }
+
+          def listar_vehiculos():
+              response = table.query(
+                  KeyConditionExpression='record_type = :record_type_val',
+                  ExpressionAttributeValues={':record_type_val': 'vehiculo'}
+              )
+              return {
+                  'statusCode': 200,
+                  'headers': HEADERS,
+                  'body': json.dumps(response.get('Items', []))
+              }
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ----------------------------------------------------------
+  # 4. API GATEWAY REST
+  # ----------------------------------------------------------
+  VehiculosApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-api"
+      Description: "API REST para gestión de vehículos"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # --- Recurso /vehiculos ---
+  VehiculosResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ParentId: !GetAtt VehiculosApi.RootResourceId
+      PathPart: vehiculos
+
+  # --- GET /vehiculos ---
+  VehiculosGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- POST /vehiculos ---
+  VehiculosPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- PUT /vehiculos ---
+  VehiculosPutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- OPTIONS /vehiculos (CORS Preflight) ---
+  VehiculosOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # --- GET / (raíz) ---
+  RootGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !GetAtt VehiculosApi.RootResourceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- OPTIONS / (raíz CORS Preflight) ---
+  RootOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !GetAtt VehiculosApi.RootResourceId
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # --- Deployment del API ---
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - VehiculosGetMethod
+      - VehiculosPostMethod
+      - VehiculosPutMethod
+      - VehiculosOptionsMethod
+      - RootGetMethod
+      - RootOptionsMethod
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      Description: !Sub "Deployment inicial - ${ProjectName}"
+
+  # --- Stage del API ---
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref StageName
+      Description: !Sub "Stage ${StageName} - ${ProjectName}"
+      # Habilitar logs de acceso en CloudWatch
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: false
+          MetricsEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # --- Permiso para que API Gateway invoque la Lambda ---
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt VehiculosLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      # Permite invocaciones desde cualquier método/recurso de esta API
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${VehiculosApi}/*/*/*"
+
+  # ----------------------------------------------------------
+  # 5. BUCKET S3 PARA HOSTING WEB ESTÁTICO
+  # ----------------------------------------------------------
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-web-${AWS::AccountId}"
+      # Habilitar hosting web estático
+      WebsiteConfiguration:
+        IndexDocument: indexTabla.html
+        ErrorDocument: index.html
+      # Bloquear acceso público directo (se accede vía política de bucket)
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            MaxAge: 3000
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # --- Política del bucket S3 para acceso público de lectura ---
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${WebsiteBucket.Arn}/*"
+
+  # ----------------------------------------------------------
+  # 6. CLOUDWATCH LOG GROUP PARA LA LAMBDA
+  # ----------------------------------------------------------
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${VehiculosLambda}"
+      RetentionInDays: 30
+
+# ============================================================
+# OUTPUTS
+# ============================================================
+Outputs:
+
+  ApiUrl:
+    Description: "URL base de la API REST"
+    Value: !Sub "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+    Export:
+      Name: !Sub "${ProjectName}-ApiUrl"
+
+  ApiVehiculosUrl:
+    Description: "Endpoint /vehiculos de la API REST"
+    Value: !Sub "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos"
+    Export:
+      Name: !Sub "${ProjectName}-ApiVehiculosUrl"
+
+  DynamoDBTableName:
+    Description: "Nombre de la tabla DynamoDB"
+    Value: !Ref VehiculosTable
+    Export:
+      Name: !Sub "${ProjectName}-DynamoDBTable"
+
+  LambdaFunctionName:
+    Description: "Nombre de la función Lambda"
+    Value: !Ref VehiculosLambda
+    Export:
+      Name: !Sub "${ProjectName}-LambdaFunction"
+
+  WebsiteBucketName:
+    Description: "Nombre del bucket S3"
+    Value: !Ref WebsiteBucket
+    Export:
+      Name: !Sub "${ProjectName}-WebsiteBucket"
+
+  WebsiteUrl:
+    Description: "URL del sitio web estático en S3"
+    Value: !GetAtt WebsiteBucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-WebsiteUrl"
+
+  WebsiteUrlTabla:
+    Description: "URL directa a la página de tabla de vehículos"
+    Value: !Sub "${WebsiteBucket.WebsiteURL}/indexTabla.html"
+    Export:
+      Name: !Sub "${ProjectName}-WebsiteUrlTabla"
