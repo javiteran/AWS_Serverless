@@ -1,0 +1,1056 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Solución Serverless para AWS Academy con autenticación Cognito:
+  S3 + API Gateway REST (protegida con JWT) + Lambda + DynamoDB + Cognito User Pool.
+  Usa LabRole existente. Sube los HTML automáticamente con la URL de la API y
+  los parámetros de Cognito ya inyectados.
+
+# ============================================================
+# PARÁMETROS
+# ============================================================
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: mis-vehiculos
+    Description: Nombre base del proyecto (prefijo en los recursos)
+
+  StageName:
+    Type: String
+    Default: v1
+    AllowedValues: [v1, v2, prod, dev]
+    Description: Nombre del stage de API Gateway
+
+  DynamoDBBillingMode:
+    Type: String
+    Default: PAY_PER_REQUEST
+    AllowedValues: [PAY_PER_REQUEST, PROVISIONED]
+    Description: Modo de facturación de DynamoDB
+
+  LabRoleName:
+    Type: String
+    Default: LabRole
+    Description: >
+      Nombre del rol IAM proporcionado por AWS Academy (normalmente "LabRole").
+      El ARN se construye automáticamente usando el Account ID de la cuenta activa.
+
+# ============================================================
+# RECURSOS
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # 1. COGNITO USER POOL
+  # ----------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-user-pool"
+      # Permite login con email
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      # Política de contraseñas
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      # Mensaje de verificación por email
+      EmailVerificationSubject: !Sub "Verifica tu cuenta - ${ProjectName}"
+      EmailVerificationMessage: "Tu código de verificación es: {####}"
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+      UserPoolTags:
+        Project: !Ref ProjectName
+
+  # ----------------------------------------------------------
+  # 2. COGNITO USER POOL CLIENT (para el navegador)
+  # ----------------------------------------------------------
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${ProjectName}-web-client"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false          # false = cliente público (SPA/browser)
+      # Flujos de autenticación permitidos
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      # Hosted UI — URLs de callback y logout
+      # Se actualizan automáticamente con la URL del bucket S3
+      CallbackURLs:
+        - !Sub "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/indexTabla.html"
+        - http://localhost:3000/indexTabla.html
+      LogoutURLs:
+        - !Sub "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/index.html"
+        - http://localhost:3000/index.html
+      AllowedOAuthFlows:
+        - implicit                   # Flujo implicit para SPA (token directo en URL)
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      SupportedIdentityProviders:
+        - COGNITO
+      # Validez de los tokens
+      AccessTokenValidity: 1         # horas
+      IdTokenValidity: 1             # horas
+      RefreshTokenValidity: 30       # días
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  # ----------------------------------------------------------
+  # 3. COGNITO USER POOL DOMAIN (Hosted UI)
+  # ----------------------------------------------------------
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      # Dominio único: projectname-accountid
+      Domain: !Sub "${ProjectName}-${AWS::AccountId}"
+      UserPoolId: !Ref UserPool
+
+  # ----------------------------------------------------------
+  # 4. TABLA DYNAMODB
+  # ----------------------------------------------------------
+  VehiculosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-vehiculos"
+      BillingMode: !Ref DynamoDBBillingMode
+      AttributeDefinitions:
+        - AttributeName: record_type
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: record_type
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ----------------------------------------------------------
+  # 5. FUNCIÓN LAMBDA PRINCIPAL
+  # ----------------------------------------------------------
+  VehiculosLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-api"
+      Description: "API REST para gestión de vehículos con CORS y Cognito (AWS Academy)"
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref VehiculosTable
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          import uuid
+          from datetime import datetime
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+          HEADERS = {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type,Authorization'
+          }
+
+          def lambda_handler(event, context):
+              if event['httpMethod'] == 'OPTIONS':
+                  return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps('OK')}
+              http_method = event['httpMethod']
+              path = event['path']
+              # El authorizer de Cognito ya validó el token antes de llegar aquí.
+              # Podemos leer el email del usuario autenticado desde el contexto.
+              user_email = (event.get('requestContext', {})
+                                 .get('authorizer', {})
+                                 .get('claims', {})
+                                 .get('email', 'unknown'))
+              if path == '/vehiculos':
+                  if http_method == 'GET':
+                      return listar_vehiculos()
+                  elif http_method == 'POST':
+                      body = json.loads(event['body']) if event.get('body') else {}
+                      body['createdBy'] = user_email
+                      return crear_vehiculo(body)
+                  elif http_method == 'PUT':
+                      body = json.loads(event['body']) if event.get('body') else {}
+                      body['updatedBy'] = user_email
+                      return actualiza_vehiculo(body)
+              elif path == '/':
+                  if http_method == 'GET':
+                      return {'statusCode': 200, 'headers': HEADERS,
+                              'body': json.dumps({'message': 'Mis Vehiculos - Pagina principal'})}
+              return {'statusCode': 404, 'headers': HEADERS, 'body': json.dumps({'error': 'Not Found'})}
+
+          def crear_vehiculo(data):
+              if not data:
+                  return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'Missing request body'})}
+              item = {'id': str(uuid.uuid4())[:10], 'record_type': 'vehiculo',
+                      'createdAt': datetime.now().isoformat(), **data}
+              table.put_item(Item=item)
+              return {'statusCode': 201, 'headers': HEADERS, 'body': json.dumps(item)}
+
+          def actualiza_vehiculo(data):
+              if not data or 'id' not in data:
+                  return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'Missing id'})}
+              item_id = data['id']
+              expr = 'SET updatedAt = :updatedAt'
+              vals = {':updatedAt': datetime.now().isoformat()}
+              for key, value in data.items():
+                  if key != 'id':
+                      expr += f', {key} = :{key}'
+                      vals[f':{key}'] = value
+              table.update_item(Key={'id': item_id, 'record_type': 'vehiculo'},
+                                UpdateExpression=expr, ExpressionAttributeValues=vals,
+                                ReturnValues='ALL_NEW')
+              return {'statusCode': 200, 'headers': HEADERS,
+                      'body': json.dumps({'id': item_id, 'message': 'vehiculo updated successfully'})}
+
+          def listar_vehiculos():
+              response = table.query(
+                  KeyConditionExpression='record_type = :record_type_val',
+                  ExpressionAttributeValues={':record_type_val': 'vehiculo'})
+              return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps(response.get('Items', []))}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ----------------------------------------------------------
+  # 6. API GATEWAY REST
+  # ----------------------------------------------------------
+  VehiculosApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-api"
+      Description: "API REST para gestión de vehículos con Cognito Authorizer (AWS Academy)"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # --- Cognito Authorizer ---
+  # Valida el JWT (IdToken) de Cognito en cada petición antes de invocar la Lambda
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub "${ProjectName}-cognito-authorizer"
+      RestApiId: !Ref VehiculosApi
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !GetAtt UserPool.Arn
+
+  # --- Recurso /vehiculos ---
+  VehiculosResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ParentId: !GetAtt VehiculosApi.RootResourceId
+      PathPart: vehiculos
+
+  # --- GET /vehiculos (protegido con Cognito) ---
+  VehiculosGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- POST /vehiculos (protegido con Cognito) ---
+  VehiculosPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- PUT /vehiculos (protegido con Cognito) ---
+  VehiculosPutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: PUT
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- OPTIONS /vehiculos (CORS Preflight — SIN authorizer, el browser lo envía sin token) ---
+  VehiculosOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !Ref VehiculosResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # --- GET / (raíz, público) ---
+  RootGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !GetAtt VehiculosApi.RootResourceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt VehiculosLambda.Arn
+
+  # --- OPTIONS / (raíz CORS Preflight) ---
+  RootOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      ResourceId: !GetAtt VehiculosApi.RootResourceId
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - VehiculosGetMethod
+      - VehiculosPostMethod
+      - VehiculosPutMethod
+      - VehiculosOptionsMethod
+      - RootGetMethod
+      - RootOptionsMethod
+    Properties:
+      RestApiId: !Ref VehiculosApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref VehiculosApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref StageName
+      Description: !Sub "Stage ${StageName} - ${ProjectName} (Academy + Cognito)"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt VehiculosLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${VehiculosApi}/*/*/*"
+
+  # ----------------------------------------------------------
+  # 7. BUCKET S3 PARA HOSTING WEB ESTÁTICO
+  # ----------------------------------------------------------
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-web-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: indexTabla.html
+        ErrorDocument: login.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ["*"]
+            MaxAge: 3000
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${WebsiteBucket.Arn}/*"
+
+  # ----------------------------------------------------------
+  # 8. CLOUDWATCH LOG GROUP
+  # ----------------------------------------------------------
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-api"
+      RetentionInDays: 7
+
+  # ----------------------------------------------------------
+  # 9. LAMBDA AUXILIAR — sube los HTML al bucket S3
+  # ----------------------------------------------------------
+  S3UploaderLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-s3-uploader"
+      Description: "Custom Resource: sube los archivos HTML al bucket S3 durante el despliegue"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
+      Timeout: 60
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] in ('Create', 'Update'):
+                      s3 = boto3.client('s3')
+                      bucket = event['ResourceProperties']['BucketName']
+                      files  = event['ResourceProperties']['Files']
+                      for f in files:
+                          s3.put_object(
+                              Bucket=bucket,
+                              Key=f['Key'],
+                              Body=f['Content'].encode('utf-8'),
+                              ContentType=f['ContentType']
+                          )
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"ERROR: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  S3UploaderLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt S3UploaderLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: cloudformation.amazonaws.com
+
+  # ----------------------------------------------------------
+  # 10. CUSTOM RESOURCE — sube los 4 HTML con parámetros Cognito inyectados
+  #
+  # Parámetros inyectados en cada HTML via !Sub:
+  #   - URL de la API Gateway
+  #   - Cognito User Pool ID
+  #   - Cognito Client ID
+  #   - Cognito Hosted UI Domain
+  #   - AWS Region
+  # ----------------------------------------------------------
+  UploadWebFiles:
+    Type: Custom::S3Upload
+    DependsOn:
+      - WebsiteBucketPolicy
+      - ApiStage
+      - S3UploaderLambdaPermission
+      - UserPoolDomain
+    Properties:
+      ServiceToken: !GetAtt S3UploaderLambda.Arn
+      BucketName: !Ref WebsiteBucket
+      ApiUrl: !Sub "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos"
+      Files:
+
+        # ---- login.html ----
+        - Key: login.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Iniciar sesión - Mis Vehículos</title>
+                <style>
+                    * { box-sizing: border-box; margin: 0; padding: 0; }
+                    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+                    .card { background: white; padding: 48px 40px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.12); width: 100%; max-width: 400px; text-align: center; }
+                    .logo { font-size: 3rem; margin-bottom: 12px; }
+                    h1 { color: #1a73e8; font-size: 1.6rem; margin-bottom: 8px; }
+                    p { color: #70757a; font-size: 0.95rem; margin-bottom: 32px; }
+                    .btn-login { display: block; width: 100%; padding: 14px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; text-decoration: none; transition: background 0.2s; }
+                    .btn-login:hover { background: #1557b0; }
+                    .note { margin-top: 20px; font-size: 0.82rem; color: #9aa0a6; }
+                </style>
+            </head>
+            <body>
+            <div class="card">
+                <div class="logo">🚗</div>
+                <h1>Mis Vehículos</h1>
+                <p>Inicia sesión para acceder al sistema de gestión de vehículos</p>
+                <a id="btnLogin" class="btn-login" href="#">Iniciar sesión / Registrarse</a>
+                <p class="note">Acceso gestionado por AWS Cognito</p>
+            </div>
+            <script>
+                // Parámetros Cognito inyectados por CloudFormation
+                const COGNITO_DOMAIN   = "${ProjectName}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com";
+                const CLIENT_ID        = "${UserPoolClient}";
+                const REDIRECT_URI     = encodeURIComponent(
+                    "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/indexTabla.html"
+                );
+                const LOGIN_URL = "https://" + COGNITO_DOMAIN +
+                    "/login?client_id=" + CLIENT_ID +
+                    "&response_type=token" +
+                    "&scope=openid+email+profile" +
+                    "&redirect_uri=" + REDIRECT_URI;
+                document.getElementById('btnLogin').href = LOGIN_URL;
+                // Si ya hay token válido, redirigir directamente al panel
+                const hash = window.location.hash;
+                if (hash.includes('id_token')) {
+                    window.location.href = 'indexTabla.html' + hash;
+                }
+            </script>
+            </body>
+            </html>
+
+        # ---- auth.js (módulo compartido de autenticación) ----
+        - Key: auth.js
+          ContentType: application/javascript
+          Content: !Sub |
+            // auth.js — Módulo compartido de autenticación Cognito
+            // Inyectado por CloudFormation con los parámetros reales del User Pool.
+
+            const AUTH = {
+                cognitoDomain : "${ProjectName}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com",
+                clientId      : "${UserPoolClient}",
+                region        : "${AWS::Region}",
+                redirectUri   : "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/indexTabla.html",
+                logoutUri     : "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/login.html",
+
+                // Guarda los tokens del hash de la URL (flujo implicit)
+                parseTokensFromHash() {
+                    const hash = window.location.hash.substring(1);
+                    if (!hash) return false;
+                    const params = Object.fromEntries(hash.split('&').map(p => p.split('=')));
+                    if (params.id_token) {
+                        sessionStorage.setItem('id_token',      params.id_token);
+                        sessionStorage.setItem('access_token',  params.access_token || '');
+                        sessionStorage.setItem('expires_in',    params.expires_in   || '3600');
+                        sessionStorage.setItem('token_ts',      Date.now().toString());
+                        // Limpiar el hash de la URL sin recargar
+                        history.replaceState(null, '', window.location.pathname);
+                        return true;
+                    }
+                    return false;
+                },
+
+                // Devuelve el id_token si existe y no ha expirado
+                getIdToken() {
+                    const token = sessionStorage.getItem('id_token');
+                    const ts    = parseInt(sessionStorage.getItem('token_ts') || '0');
+                    const exp   = parseInt(sessionStorage.getItem('expires_in') || '3600') * 1000;
+                    if (token && (Date.now() - ts) < exp) return token;
+                    return null;
+                },
+
+                // Decodifica el payload del JWT (sin verificar firma — solo para UI)
+                decodeToken(token) {
+                    try {
+                        const payload = token.split('.')[1];
+                        return JSON.parse(atob(payload.replace(/-/g,'+').replace(/_/g,'/')));
+                    } catch { return {}; }
+                },
+
+                // Redirige al login de Cognito Hosted UI
+                redirectToLogin() {
+                    const url = "https://" + this.cognitoDomain +
+                        "/login?client_id=" + this.clientId +
+                        "&response_type=token" +
+                        "&scope=openid+email+profile" +
+                        "&redirect_uri=" + encodeURIComponent(this.redirectUri);
+                    window.location.href = url;
+                },
+
+                // Cierra sesión
+                logout() {
+                    sessionStorage.clear();
+                    const url = "https://" + this.cognitoDomain +
+                        "/logout?client_id=" + this.clientId +
+                        "&logout_uri=" + encodeURIComponent(this.logoutUri);
+                    window.location.href = url;
+                },
+
+                // Llama a esta función al inicio de cada página protegida.
+                // Devuelve el token o redirige al login.
+                requireAuth() {
+                    this.parseTokensFromHash();
+                    const token = this.getIdToken();
+                    if (!token) { this.redirectToLogin(); return null; }
+                    return token;
+                }
+            };
+
+        # ---- index.html ----
+        - Key: index.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Probador de API Vehículos</title>
+                <style>
+                    body { font-family: sans-serif; margin: 0; line-height: 1.6; background-color: #f0f2f5; }
+                    .container { max-width: 600px; margin: 30px auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; background: white; }
+                    button { padding: 10px 15px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-right: 5px; }
+                    button:hover { background-color: #0056b3; }
+                    pre { background: #f4f4f4; padding: 10px; border: 1px solid #ddd; overflow-x: auto; min-height: 100px; }
+                    .status { font-weight: bold; margin-bottom: 10px; }
+                    nav { background-color: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+                    nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+                    nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s; white-space: nowrap; }
+                    nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+                    nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
+                    .nav-user { margin-left: auto; color: rgba(255,255,255,0.85); font-size: 0.85rem; padding: 0 8px; }
+                    .btn-logout { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; margin-left: 8px; }
+                    .btn-logout:hover { background: rgba(255,255,255,0.25); }
+                </style>
+            </head>
+            <body>
+            <nav>
+                <span class="nav-brand">Mis Vehículos</span>
+                <a href="index.html" class="active">Probador API</a>
+                <a href="indexTabla.html">Panel de Vehículos</a>
+                <a href="altavehiculo.html">Alta de Vehículo</a>
+                <span class="nav-user" id="navUser"></span>
+                <button class="btn-logout" onclick="AUTH.logout()">Cerrar sesión</button>
+            </nav>
+            <div class="container">
+                <h2>Prueba de API Gateway</h2>
+                <div class="status" id="status">Estado: Esperando acción...</div>
+                <button onclick="raiz()">Raiz</button>
+                <button onclick="listarVehiculos()">Listar Vehículos</button>
+                <button onclick="actualizarVehiculo()" style="background-color: #28a745;">Actualizar Vehículo (Mock)</button>
+                <h3>Resultado:</h3>
+                <pre id="resultado">Los datos aparecerán aquí...</pre>
+            </div>
+            <script src="auth.js"></script>
+            <script>
+                const API_URL      = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos";
+                const API_URL_Base = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}";
+                const token = AUTH.requireAuth();
+                if (token) {
+                    const claims = AUTH.decodeToken(token);
+                    document.getElementById('navUser').textContent = claims.email || '';
+                }
+                function authHeaders() {
+                    return { 'Content-Type': 'application/json', 'Authorization': AUTH.getIdToken() };
+                }
+                async function raiz() {
+                    const statusDiv = document.getElementById('status');
+                    const resDiv = document.getElementById('resultado');
+                    statusDiv.innerText = "Estado: Cargando...";
+                    try {
+                        const r = await fetch(API_URL_Base, { headers: authHeaders() });
+                        resDiv.innerText = JSON.stringify(await r.json(), null, 2);
+                        statusDiv.innerText = "Estado: Éxito!";
+                    } catch (e) { resDiv.innerText = "Error: " + e.message; statusDiv.innerText = "Estado: Error"; }
+                }
+                async function listarVehiculos() {
+                    const statusDiv = document.getElementById('status');
+                    const resDiv = document.getElementById('resultado');
+                    statusDiv.innerText = "Estado: Cargando...";
+                    try {
+                        const r = await fetch(API_URL, { headers: authHeaders() });
+                        resDiv.innerText = JSON.stringify(await r.json(), null, 2);
+                        statusDiv.innerText = "Estado: Éxito!";
+                    } catch (e) { resDiv.innerText = "Error: " + e.message; statusDiv.innerText = "Estado: Error"; }
+                }
+                async function actualizarVehiculo() {
+                    const statusDiv = document.getElementById('status');
+                    const resDiv = document.getElementById('resultado');
+                    statusDiv.innerText = "Estado: Actualizando...";
+                    try {
+                        const r = await fetch(API_URL, { method: 'PUT', headers: authHeaders(),
+                            body: JSON.stringify({ id: "33c79a34-c", disponible: "False", nota: "En mantenimiento" }) });
+                        resDiv.innerText = JSON.stringify(await r.json(), null, 2);
+                        statusDiv.innerText = "Estado: Actualización completada";
+                    } catch (e) { resDiv.innerText = "Error: " + e.message; statusDiv.innerText = "Estado: Error"; }
+                }
+            </script>
+            </body>
+            </html>
+
+        # ---- indexTabla.html ----
+        - Key: indexTabla.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Panel de Vehículos</title>
+                <style>
+                    body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #f0f2f5; color: #333; }
+                    .container { max-width: 900px; margin: 30px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+                    h2 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 15px; margin-top: 0; }
+                    .controls { margin: 20px 0; display: flex; gap: 12px; }
+                    button { padding: 12px 24px; cursor: pointer; border: none; border-radius: 6px; font-weight: 600; font-size: 14px; transition: all 0.2s; }
+                    .btn-list { background: #1a73e8; color: white; } .btn-list:hover { background: #1557b0; }
+                    #status-bar { padding: 10px; margin-bottom: 20px; border-radius: 6px; font-size: 0.9em; background: #f8f9fa; border: 1px solid #ddd; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                    th, td { text-align: left; padding: 15px; border-bottom: 1px solid #eee; }
+                    th { background: #f8f9fa; color: #5f6368; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+                    tr:hover { background: #f1f3f4; }
+                    .badge { padding: 5px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+                    .bg-available { background: #e6f4ea; color: #1e8e3e; }
+                    .bg-maint { background: #fce8e6; color: #d93025; }
+                    code { background: #f1f3f4; padding: 2px 5px; border-radius: 4px; font-family: monospace; }
+                    nav { background: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+                    nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+                    nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s; white-space: nowrap; }
+                    nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+                    nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
+                    .nav-user { margin-left: auto; color: rgba(255,255,255,0.85); font-size: 0.85rem; padding: 0 8px; }
+                    .btn-logout { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; margin-left: 8px; }
+                    .btn-logout:hover { background: rgba(255,255,255,0.25); }
+                </style>
+            </head>
+            <body>
+            <nav>
+                <span class="nav-brand">Mis Vehículos</span>
+                <a href="index.html">Probador API</a>
+                <a href="indexTabla.html" class="active">Panel de Vehículos</a>
+                <a href="altavehiculo.html">Alta de Vehículo</a>
+                <span class="nav-user" id="navUser"></span>
+                <button class="btn-logout" onclick="AUTH.logout()">Cerrar sesión</button>
+            </nav>
+            <div class="container">
+                <h2>Panel de Vehículos</h2>
+                <div id="status-bar">Sistema listo para conectar.</div>
+                <div class="controls">
+                    <button id="btnListar" class="btn-list">Listar Vehículos</button>
+                </div>
+                <div id="tabla-contenedor">
+                    <p style="text-align:center;color:#70757a;margin-top:40px;">Presiona "Listar" para cargar los datos desde AWS.</p>
+                </div>
+            </div>
+            <script src="auth.js"></script>
+            <script>
+                const API_URL = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos";
+                const token = AUTH.requireAuth();
+                if (token) {
+                    const claims = AUTH.decodeToken(token);
+                    document.getElementById('navUser').textContent = claims.email || '';
+                }
+                function authHeaders() {
+                    return { 'Authorization': AUTH.getIdToken() };
+                }
+                async function obtenerDatos() {
+                    const sb = document.getElementById('status-bar');
+                    const ct = document.getElementById('tabla-contenedor');
+                    sb.innerText = "Conectando con API Gateway..."; sb.style.color = "#1a73e8";
+                    try {
+                        const r = await fetch(API_URL, { headers: authHeaders() });
+                        if (!r.ok) throw new Error("Error servidor: " + r.status);
+                        renderizarTabla(await r.json());
+                        sb.innerText = "Datos actualizados correctamente."; sb.style.color = "#34a853";
+                    } catch (e) {
+                        sb.innerText = "Error: " + e.message; sb.style.color = "#d93025";
+                        ct.innerHTML = "<p style='color:red;text-align:center;'>No se pudo cargar la información.</p>";
+                    }
+                }
+                function renderizarTabla(lista) {
+                    const ct = document.getElementById('tabla-contenedor');
+                    if (!lista.length) { ct.innerHTML = "<p>No hay vehículos registrados.</p>"; return; }
+                    let html = "<table><thead><tr><th>ID</th><th>Tipo</th><th>Matrícula</th><th>Disponible</th><th>Combustible</th><th>Creado por</th></tr></thead><tbody>";
+                    lista.forEach(v => {
+                        const ok = String(v.disponible).toLowerCase() === "true";
+                        html += "<tr><td><code>" + v.id + "</code></td><td>" + (v.tipo||'-') + "</td><td>" + (v.matricula||'-') + "</td>" +
+                            "<td><span class='badge " + (ok?'bg-available':'bg-maint') + "'>" + (ok?'DISPONIBLE':'NO DISPONIBLE') + "</span></td>" +
+                            "<td>" + (v.combustible||'-') + "</td><td>" + (v.createdBy||'-') + "</td></tr>";
+                    });
+                    html += "</tbody></table>";
+                    ct.innerHTML = html;
+                }
+                document.addEventListener("DOMContentLoaded", () => {
+                    document.getElementById("btnListar").addEventListener("click", obtenerDatos);
+                });
+            </script>
+            </body>
+            </html>
+
+        # ---- altavehiculo.html ----
+        - Key: altavehiculo.html
+          ContentType: text/html
+          Content: !Sub |
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Alta de Vehículo</title>
+                <style>
+                    * { box-sizing: border-box; margin: 0; padding: 0; }
+                    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; min-height: 100vh; }
+                    .page-wrapper { display: flex; justify-content: center; padding: 40px 20px; }
+                    .container { background: white; padding: 36px 40px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 520px; }
+                    nav { background: #1a73e8; padding: 0 24px; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+                    nav .nav-brand { color: white; font-weight: 700; font-size: 1rem; padding: 14px 12px 14px 0; margin-right: 12px; border-right: 1px solid rgba(255,255,255,0.3); white-space: nowrap; }
+                    nav a { color: rgba(255,255,255,0.85); text-decoration: none; padding: 14px 16px; font-size: 0.9rem; font-weight: 500; border-radius: 4px; transition: background 0.2s; white-space: nowrap; }
+                    nav a:hover { background: rgba(255,255,255,0.15); color: white; }
+                    nav a.active { background: rgba(255,255,255,0.2); color: white; font-weight: 700; }
+                    .nav-user { margin-left: auto; color: rgba(255,255,255,0.85); font-size: 0.85rem; padding: 0 8px; }
+                    .btn-logout { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; margin-left: 8px; }
+                    .btn-logout:hover { background: rgba(255,255,255,0.25); }
+                    h2 { color: #1a73e8; margin-bottom: 8px; font-size: 1.5rem; }
+                    .subtitle { color: #70757a; font-size: 0.9rem; margin-bottom: 28px; border-bottom: 2px solid #e8eaed; padding-bottom: 16px; }
+                    .form-group { margin-bottom: 20px; }
+                    label { display: block; font-size: 0.85rem; font-weight: 600; color: #3c4043; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+                    label .required { color: #d93025; margin-left: 3px; }
+                    input[type="text"], select { width: 100%; padding: 10px 14px; border: 1px solid #dadce0; border-radius: 6px; font-size: 0.95rem; color: #3c4043; background: #fff; transition: border-color 0.2s, box-shadow 0.2s; }
+                    input[type="text"]:focus, select:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.15); }
+                    input::placeholder { color: #bdc1c6; }
+                    .form-row { display: flex; gap: 16px; }
+                    .form-row .form-group { flex: 1; }
+                    .btn-submit { width: 100%; padding: 13px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 8px; transition: background 0.2s; }
+                    .btn-submit:hover { background: #1557b0; }
+                    .btn-submit:disabled { background: #a8c7fa; cursor: not-allowed; }
+                    #status-msg { margin-top: 20px; padding: 12px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 500; display: none; }
+                    #status-msg.success { background: #e6f4ea; color: #1e8e3e; border: 1px solid #a8d5b5; display: block; }
+                    #status-msg.error   { background: #fce8e6; color: #d93025; border: 1px solid #f5c6c2; display: block; }
+                    #status-msg.loading { background: #e8f0fe; color: #1a73e8; border: 1px solid #aecbfa; display: block; }
+                    #respuesta-json { display: none; margin-top: 16px; }
+                    #respuesta-json summary { cursor: pointer; font-size: 0.85rem; color: #70757a; }
+                    #respuesta-json pre { background: #f8f9fa; border: 1px solid #e8eaed; border-radius: 6px; padding: 12px; font-size: 0.82rem; overflow-x: auto; margin-top: 8px; }
+                </style>
+            </head>
+            <body>
+            <nav>
+                <span class="nav-brand">Mis Vehículos</span>
+                <a href="index.html">Probador API</a>
+                <a href="indexTabla.html">Panel de Vehículos</a>
+                <a href="altavehiculo.html" class="active">Alta de Vehículo</a>
+                <span class="nav-user" id="navUser"></span>
+                <button class="btn-logout" onclick="AUTH.logout()">Cerrar sesión</button>
+            </nav>
+            <div class="page-wrapper"><div class="container">
+                <h2>Alta de Vehículo</h2>
+                <p class="subtitle">Introduce los datos del nuevo vehículo para registrarlo en el sistema</p>
+                <form id="formVehiculo" novalidate>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="tipo">Tipo <span class="required">*</span></label>
+                            <select id="tipo" required>
+                                <option value="" disabled selected>Selecciona...</option>
+                                <option>Coche</option><option>Moto</option><option>Scooter</option>
+                                <option>Furgoneta</option><option>Camión</option><option>Avión</option><option>Otro</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="combustible">Combustible <span class="required">*</span></label>
+                            <select id="combustible" required>
+                                <option value="" disabled selected>Selecciona...</option>
+                                <option>Gasolina</option><option>Diésel</option><option>Eléctrico</option>
+                                <option>Híbrido</option><option>Hidrógeno</option><option>Jet Fuel</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="matricula">Matrícula <span class="required">*</span></label>
+                        <input type="text" id="matricula" placeholder="Ej: ABC-1234" required maxlength="10">
+                    </div>
+                    <div class="form-group">
+                        <label for="modelo">Modelo</label>
+                        <input type="text" id="modelo" placeholder="Ej: Toyota Corolla" maxlength="60">
+                    </div>
+                    <div class="form-group">
+                        <label for="disponible">Disponibilidad <span class="required">*</span></label>
+                        <select id="disponible" required>
+                            <option value="True" selected>Disponible</option>
+                            <option value="False">No disponible</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="nota">Nota</label>
+                        <input type="text" id="nota" placeholder="Observaciones opcionales..." maxlength="120">
+                    </div>
+                    <button type="submit" class="btn-submit" id="btnEnviar">Registrar Vehículo</button>
+                </form>
+                <div id="status-msg"></div>
+                <details id="respuesta-json">
+                    <summary>Ver respuesta del servidor</summary>
+                    <pre id="json-output"></pre>
+                </details>
+            </div></div>
+            <script src="auth.js"></script>
+            <script>
+                const API_URL = "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos";
+                const token = AUTH.requireAuth();
+                if (token) {
+                    const claims = AUTH.decodeToken(token);
+                    document.getElementById('navUser').textContent = claims.email || '';
+                }
+                const form = document.getElementById('formVehiculo');
+                const btn  = document.getElementById('btnEnviar');
+                const msg  = document.getElementById('status-msg');
+                const resp = document.getElementById('respuesta-json');
+                const out  = document.getElementById('json-output');
+                function setStatus(t, m) { msg.className = t; msg.textContent = m; }
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const tipo = document.getElementById('tipo').value.trim();
+                    const combustible = document.getElementById('combustible').value.trim();
+                    const matricula = document.getElementById('matricula').value.trim();
+                    const disponible = document.getElementById('disponible').value;
+                    if (!tipo || !combustible || !matricula) { setStatus('error','Rellena los campos obligatorios (*).'); return; }
+                    const payload = { tipo, combustible, matricula, disponible };
+                    const modelo = document.getElementById('modelo').value.trim();
+                    const nota   = document.getElementById('nota').value.trim();
+                    if (modelo) payload.modelo = modelo;
+                    if (nota)   payload.nota   = nota;
+                    btn.disabled = true; btn.textContent = 'Enviando...';
+                    setStatus('loading', 'Conectando con la API...');
+                    resp.style.display = 'none';
+                    try {
+                        const r = await fetch(API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': AUTH.getIdToken() },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await r.json();
+                        out.textContent = JSON.stringify(data, null, 2);
+                        resp.style.display = 'block';
+                        if (r.ok) { setStatus('success', 'Vehículo registrado. ID: ' + data.id); form.reset(); }
+                        else { setStatus('error', 'Error ' + r.status + ': ' + (data.error || 'Error inesperado.')); }
+                    } catch (err) { setStatus('error', 'No se pudo conectar con la API.'); }
+                    finally { btn.disabled = false; btn.textContent = 'Registrar Vehículo'; }
+                });
+            </script>
+            </body>
+            </html>
+
+# ============================================================
+# OUTPUTS
+# ============================================================
+Outputs:
+
+  ApiUrl:
+    Description: "URL base de la API REST"
+    Value: !Sub "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+
+  ApiVehiculosUrl:
+    Description: "Endpoint /vehiculos (requiere token Cognito en header Authorization)"
+    Value: !Sub "https://${VehiculosApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/vehiculos"
+
+  CognitoUserPoolId:
+    Description: "ID del Cognito User Pool"
+    Value: !Ref UserPool
+
+  CognitoClientId:
+    Description: "ID del Cognito User Pool Client"
+    Value: !Ref UserPoolClient
+
+  CognitoHostedUiUrl:
+    Description: "URL de la Hosted UI de Cognito para login/registro"
+    Value: !Sub "https://${ProjectName}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+
+  DynamoDBTableName:
+    Description: "Nombre de la tabla DynamoDB"
+    Value: !Ref VehiculosTable
+
+  LambdaFunctionName:
+    Description: "Nombre de la función Lambda principal"
+    Value: !Ref VehiculosLambda
+
+  WebsiteBucketName:
+    Description: "Nombre del bucket S3"
+    Value: !Ref WebsiteBucket
+
+  WebsiteLoginUrl:
+    Description: "URL de la página de login"
+    Value: !Sub "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/login.html"
+
+  WebsiteUrl:
+    Description: "URL del panel de vehículos (redirige a login si no hay sesión)"
+    Value: !Sub "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/indexTabla.html"
+
+  WebsiteUrlAltaVehiculo:
+    Description: "URL del formulario de alta de vehículo"
+    Value: !Sub "http://${ProjectName}-web-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com/altavehiculo.html"
+
+  LabRoleUsed:
+    Description: "ARN del LabRole utilizado"
+    Value: !Sub "arn:aws:iam::${AWS::AccountId}:role/${LabRoleName}"
